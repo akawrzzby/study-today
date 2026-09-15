@@ -1,0 +1,99 @@
+[
+  {
+    "title": "二分查找的变体与应用",
+    "date": "2025-02-28T00:00:00.000Z",
+    "description": "整理二分查找的常见变体：查找第一个等于 target 的位置、查找最后一个等于 target 的位置、查找第一个大于等于 target 的位置等。",
+    "tags": [
+      "算法",
+      "二分查找",
+      "搜索"
+    ],
+    "category": "算法笔记",
+    "published": true,
+    "body": {
+      "raw": "\n## 基本二分查找\n\n标准二分查找在一个**有序数组**中查找目标值：\n\n```python\ndef binary_search(nums, target):\n    left, right = 0, len(nums) - 1\n    while left <= right:\n        mid = left + (right - left) // 2\n        if nums[mid] == target:\n            return mid\n        elif nums[mid] < target:\n            left = mid + 1\n        else:\n            right = mid - 1\n    return -1\n```\n\n## 变体一：查找第一个等于 target 的位置\n\n当数组中存在重复元素时，找到**第一个**等于 target 的索引：\n\n```python\ndef find_first(nums, target):\n    left, right = 0, len(nums) - 1\n    result = -1\n    while left <= right:\n        mid = left + (right - left) // 2\n        if nums[mid] == target:\n            result = mid      # 记录当前找到的位置\n            right = mid - 1   # 继续向左搜索\n        elif nums[mid] < target:\n            left = mid + 1\n        else:\n            right = mid - 1\n    return result\n```\n\n## 变体二：查找第一个大于等于 target 的位置\n\n这是 C++ STL 中 `lower_bound` 的实现：\n\n```python\ndef lower_bound(nums, target):\n    left, right = 0, len(nums)\n    while left < right:\n        mid = left + (right - left) // 2\n        if nums[mid] < target:\n            left = mid + 1\n        else:\n            right = mid\n    return left  # 第一个 >= target 的位置\n```\n\n## 变体三：插值查找\n\n当数据分布均匀时，可以使用**插值查找**在 $O(\\log \\log n)$ 时间内定位：\n\n```python\ndef interpolation_search(nums, target):\n    left, right = 0, len(nums) - 1\n    while left <= right and nums[left] <= target <= nums[right]:\n        if nums[left] == nums[right]:\n            return left if nums[left] == target else -1\n\n        # 插值公式\n        pos = left + ((target - nums[left]) * (right - left)\n                      // (nums[right] - nums[left]))\n\n        if nums[pos] == target:\n            return pos\n        elif nums[pos] < target:\n            left = pos + 1\n        else:\n            right = pos - 1\n    return -1\n```\n\n> **注意**：插值查找在最坏情况下会退化到 $O(n)$，所以仅在数据分布均匀时使用。\n\n## 总结对比\n\n| 变体 | 目标 | 返回值 | 复杂度 |\n|------|------|--------|--------|\n| 标准二分 | 任意 target | 任意匹配索引 | $O(\\log n)$ |\n| find_first | 第一个 target | 最左匹配索引 | $O(\\log n)$ |\n| lower_bound | 第一个 >= target | 插入位置 | $O(\\log n)$ |\n| 插值查找 | 均匀分布 target | 匹配索引 | $O(\\log \\log n)$ 平均 |\n\n## 实践建议\n\n1. 默认使用标准二分，记住 `mid = left + (right - left) // 2` 防止溢出\n2. 遇到「查找第一个 / 最后一个」需求时，用 `result` 变量记录 + 继续搜索的模式\n3. `lower_bound` 和 `upper_bound` 是非常实用的工具函数，建议熟练掌握",
+      "html": "<h2>基本二分查找</h2>\n<p>标准二分查找在一个<strong>有序数组</strong>中查找目标值：</p>\n<pre><code class=\"language-python\">def binary_search(nums, target):\n    left, right = 0, len(nums) - 1\n    while left &#x3C;= right:\n        mid = left + (right - left) // 2\n        if nums[mid] == target:\n            return mid\n        elif nums[mid] &#x3C; target:\n            left = mid + 1\n        else:\n            right = mid - 1\n    return -1\n</code></pre>\n<h2>变体一：查找第一个等于 target 的位置</h2>\n<p>当数组中存在重复元素时，找到<strong>第一个</strong>等于 target 的索引：</p>\n<pre><code class=\"language-python\">def find_first(nums, target):\n    left, right = 0, len(nums) - 1\n    result = -1\n    while left &#x3C;= right:\n        mid = left + (right - left) // 2\n        if nums[mid] == target:\n            result = mid      # 记录当前找到的位置\n            right = mid - 1   # 继续向左搜索\n        elif nums[mid] &#x3C; target:\n            left = mid + 1\n        else:\n            right = mid - 1\n    return result\n</code></pre>\n<h2>变体二：查找第一个大于等于 target 的位置</h2>\n<p>这是 C++ STL 中 <code>lower_bound</code> 的实现：</p>\n<pre><code class=\"language-python\">def lower_bound(nums, target):\n    left, right = 0, len(nums)\n    while left &#x3C; right:\n        mid = left + (right - left) // 2\n        if nums[mid] &#x3C; target:\n            left = mid + 1\n        else:\n            right = mid\n    return left  # 第一个 >= target 的位置\n</code></pre>\n<h2>变体三：插值查找</h2>\n<p>当数据分布均匀时，可以使用<strong>插值查找</strong>在 $O(\\log \\log n)$ 时间内定位：</p>\n<pre><code class=\"language-python\">def interpolation_search(nums, target):\n    left, right = 0, len(nums) - 1\n    while left &#x3C;= right and nums[left] &#x3C;= target &#x3C;= nums[right]:\n        if nums[left] == nums[right]:\n            return left if nums[left] == target else -1\n\n        # 插值公式\n        pos = left + ((target - nums[left]) * (right - left)\n                      // (nums[right] - nums[left]))\n\n        if nums[pos] == target:\n            return pos\n        elif nums[pos] &#x3C; target:\n            left = pos + 1\n        else:\n            right = pos - 1\n    return -1\n</code></pre>\n<blockquote>\n<p><strong>注意</strong>：插值查找在最坏情况下会退化到 $O(n)$，所以仅在数据分布均匀时使用。</p>\n</blockquote>\n<h2>总结对比</h2>\n<p>| 变体 | 目标 | 返回值 | 复杂度 |\n|------|------|--------|--------|\n| 标准二分 | 任意 target | 任意匹配索引 | $O(\\log n)$ |\n| find_first | 第一个 target | 最左匹配索引 | $O(\\log n)$ |\n| lower_bound | 第一个 >= target | 插入位置 | $O(\\log n)$ |\n| 插值查找 | 均匀分布 target | 匹配索引 | $O(\\log \\log n)$ 平均 |</p>\n<h2>实践建议</h2>\n<ol>\n<li>默认使用标准二分，记住 <code>mid = left + (right - left) // 2</code> 防止溢出</li>\n<li>遇到「查找第一个 / 最后一个」需求时，用 <code>result</code> 变量记录 + 继续搜索的模式</li>\n<li><code>lower_bound</code> 和 <code>upper_bound</code> 是非常实用的工具函数，建议熟练掌握</li>\n</ol>"
+    },
+    "_id": "posts/binary-search-variants.mdx",
+    "_raw": {
+      "sourceFilePath": "posts/binary-search-variants.mdx",
+      "sourceFileName": "binary-search-variants.mdx",
+      "sourceFileDir": "posts",
+      "contentType": "mdx",
+      "flattenedPath": "posts/binary-search-variants"
+    },
+    "type": "Post",
+    "slug": "binary-search-variants",
+    "readingTime": {
+      "text": "3 min read",
+      "minutes": 2.78,
+      "time": 166800,
+      "words": 556
+    }
+  },
+  {
+    "title": "梯度下降的三种形式：BGD、SGD、MBGD",
+    "date": "2025-02-10T00:00:00.000Z",
+    "description": "详细对比批量梯度下降（BGD）、随机梯度下降（SGD）和小批量梯度下降（MBGD），从数学原理到代码实现。",
+    "tags": [
+      "机器学习",
+      "优化",
+      "梯度下降"
+    ],
+    "category": "课程笔记",
+    "published": true,
+    "body": {
+      "raw": "\n## 梯度下降的数学基础\n\n给定损失函数 J(θ)，梯度下降的更新规则为：\n\n<div className=\"my-4 p-3 bg-muted rounded-lg text-center font-serif\">\n\n**θ := θ − α · ∇J(θ)**\n\n</div>\n\n其中 α 是学习率（learning rate），∇J(θ) 是损失函数关于参数 θ 的梯度。\n\n## 批量梯度下降 (BGD)\n\n**Batch Gradient Descent** 在每一步中使用**全部训练样本**计算梯度：\n\n```python\ndef bgd(X, y, theta, alpha, epochs):\n    m = len(y)  # 总样本数\n    for epoch in range(epochs):\n        # 使用全部样本计算梯度\n        gradient = (1/m) * X.T @ (X @ theta - y)\n        theta = theta - alpha * gradient\n    return theta\n```\n\n**特点**：\n- 每步都使用全部数据，梯度方向最准确\n- 计算量大，大数据集下慢\n- 收敛稳定，不会震荡\n\n## 随机梯度下降 (SGD)\n\n**Stochastic Gradient Descent** 每一步只使用**一个随机样本**：\n\n```python\nimport numpy as np\n\ndef sgd(X, y, theta, alpha, epochs):\n    m = len(y)\n    for epoch in range(epochs):\n        for i in range(m):\n            # 随机选一个样本\n            idx = np.random.randint(0, m)\n            xi = X[idx:idx+1]\n            yi = y[idx:idx+1]\n            # 单样本梯度\n            gradient = xi.T @ (xi @ theta - yi)\n            theta = theta - alpha * gradient\n    return theta\n```\n\n**特点**：\n- 每步只用一个样本，计算极快\n- 梯度方向有噪声，训练会震荡\n- 噪声有助于跳出局部最小值\n- 最终在最小值附近摇摆不定\n\n## 小批量梯度下降 (MBGD)\n\n**Mini-Batch Gradient Descent** 是前两者的折中——每步使用一个小批量（batch）样本：\n\n```python\ndef mbgd(X, y, theta, alpha, epochs, batch_size=32):\n    m = len(y)\n    for epoch in range(epochs):\n        # 随机打乱数据\n        indices = np.random.permutation(m)\n        X_shuffled = X[indices]\n        y_shuffled = y[indices]\n\n        for i in range(0, m, batch_size):\n            # 取一个 batch\n            X_batch = X_shuffled[i:i+batch_size]\n            y_batch = y_shuffled[i:i+batch_size]\n            # 计算 batch 梯度\n            gradient = (1/batch_size) * X_batch.T @ (X_batch @ theta - y_batch)\n            theta = theta - alpha * gradient\n    return theta\n```\n\n## 对比总结\n\n| 方法 | 每步样本数 | 计算速度 | 梯度质量 | 收敛行为 |\n|------|-----------|----------|----------|----------|\n| BGD | 全部 (N) | 慢 | 精确 | 稳定下降 |\n| SGD | 1 个 | 极快 | 噪声大 | 震荡但快 |\n| MBGD | 批量 (B) | 中等 | 较好 | 折中 |\n\n> **实践建议**：实际项目中几乎总是使用 **MBGD**，batch size 通常设为 32、64 或 128。这个大小既可以利用 GPU 并行计算能力，又能获得较好的梯度估计。\n\n## Momentum 与 Adam\n\n现代优化器（如 Adam）在 MBGD 基础上加入了动量和自适应学习率：\n\n- **Momentum（动量）**：积累历史梯度方向来加速收敛\n\n<div className=\"my-4 p-3 bg-muted rounded-lg text-center font-serif\">\n\n**vₜ = β · vₜ₋₁ + (1 − β) · ∇J(θ)**\n**θ := θ − α · vₜ**\n\n</div>\n\n- **Adam**：结合 Momentum 和 RMSprop，是目前最流行的优化器\n\n```python\nimport torch.optim as optim\noptimizer = optim.Adam(model.parameters(), lr=0.001)\n```",
+      "html": "<h2>梯度下降的数学基础</h2>\n<p>给定损失函数 J(θ)，梯度下降的更新规则为：</p>\n<p><strong>θ := θ − α · ∇J(θ)</strong></p>\n<p>其中 α 是学习率（learning rate），∇J(θ) 是损失函数关于参数 θ 的梯度。</p>\n<h2>批量梯度下降 (BGD)</h2>\n<p><strong>Batch Gradient Descent</strong> 在每一步中使用<strong>全部训练样本</strong>计算梯度：</p>\n<pre><code class=\"language-python\">def bgd(X, y, theta, alpha, epochs):\n    m = len(y)  # 总样本数\n    for epoch in range(epochs):\n        # 使用全部样本计算梯度\n        gradient = (1/m) * X.T @ (X @ theta - y)\n        theta = theta - alpha * gradient\n    return theta\n</code></pre>\n<p><strong>特点</strong>：</p>\n<ul>\n<li>每步都使用全部数据，梯度方向最准确</li>\n<li>计算量大，大数据集下慢</li>\n<li>收敛稳定，不会震荡</li>\n</ul>\n<h2>随机梯度下降 (SGD)</h2>\n<p><strong>Stochastic Gradient Descent</strong> 每一步只使用<strong>一个随机样本</strong>：</p>\n<pre><code class=\"language-python\">import numpy as np\n\ndef sgd(X, y, theta, alpha, epochs):\n    m = len(y)\n    for epoch in range(epochs):\n        for i in range(m):\n            # 随机选一个样本\n            idx = np.random.randint(0, m)\n            xi = X[idx:idx+1]\n            yi = y[idx:idx+1]\n            # 单样本梯度\n            gradient = xi.T @ (xi @ theta - yi)\n            theta = theta - alpha * gradient\n    return theta\n</code></pre>\n<p><strong>特点</strong>：</p>\n<ul>\n<li>每步只用一个样本，计算极快</li>\n<li>梯度方向有噪声，训练会震荡</li>\n<li>噪声有助于跳出局部最小值</li>\n<li>最终在最小值附近摇摆不定</li>\n</ul>\n<h2>小批量梯度下降 (MBGD)</h2>\n<p><strong>Mini-Batch Gradient Descent</strong> 是前两者的折中——每步使用一个小批量（batch）样本：</p>\n<pre><code class=\"language-python\">def mbgd(X, y, theta, alpha, epochs, batch_size=32):\n    m = len(y)\n    for epoch in range(epochs):\n        # 随机打乱数据\n        indices = np.random.permutation(m)\n        X_shuffled = X[indices]\n        y_shuffled = y[indices]\n\n        for i in range(0, m, batch_size):\n            # 取一个 batch\n            X_batch = X_shuffled[i:i+batch_size]\n            y_batch = y_shuffled[i:i+batch_size]\n            # 计算 batch 梯度\n            gradient = (1/batch_size) * X_batch.T @ (X_batch @ theta - y_batch)\n            theta = theta - alpha * gradient\n    return theta\n</code></pre>\n<h2>对比总结</h2>\n<p>| 方法 | 每步样本数 | 计算速度 | 梯度质量 | 收敛行为 |\n|------|-----------|----------|----------|----------|\n| BGD | 全部 (N) | 慢 | 精确 | 稳定下降 |\n| SGD | 1 个 | 极快 | 噪声大 | 震荡但快 |\n| MBGD | 批量 (B) | 中等 | 较好 | 折中 |</p>\n<blockquote>\n<p><strong>实践建议</strong>：实际项目中几乎总是使用 <strong>MBGD</strong>，batch size 通常设为 32、64 或 128。这个大小既可以利用 GPU 并行计算能力，又能获得较好的梯度估计。</p>\n</blockquote>\n<h2>Momentum 与 Adam</h2>\n<p>现代优化器（如 Adam）在 MBGD 基础上加入了动量和自适应学习率：</p>\n<ul>\n<li><strong>Momentum（动量）</strong>：积累历史梯度方向来加速收敛</li>\n</ul>\n<p><strong>vₜ = β · vₜ₋₁ + (1 − β) · ∇J(θ)</strong>\n<strong>θ := θ − α · vₜ</strong></p>\n<ul>\n<li><strong>Adam</strong>：结合 Momentum 和 RMSprop，是目前最流行的优化器</li>\n</ul>\n<pre><code class=\"language-python\">import torch.optim as optim\noptimizer = optim.Adam(model.parameters(), lr=0.001)\n</code></pre>"
+    },
+    "_id": "posts/gradient-descent.mdx",
+    "_raw": {
+      "sourceFilePath": "posts/gradient-descent.mdx",
+      "sourceFileName": "gradient-descent.mdx",
+      "sourceFileDir": "posts",
+      "contentType": "mdx",
+      "flattenedPath": "posts/gradient-descent"
+    },
+    "type": "Post",
+    "slug": "gradient-descent",
+    "readingTime": {
+      "text": "4 min read",
+      "minutes": 3.16,
+      "time": 189600,
+      "words": 632
+    }
+  },
+  {
+    "title": "Transformer 注意力机制详解",
+    "date": "2025-03-15T00:00:00.000Z",
+    "description": "深入理解 Transformer 中的自注意力机制（Self-Attention），从 Scaled Dot-Product Attention 到 Multi-Head Attention 的完整推导。",
+    "tags": [
+      "深度学习",
+      "NLP",
+      "Transformer",
+      "Attention"
+    ],
+    "category": "论文笔记",
+    "published": true,
+    "body": {
+      "raw": "\n## 引言\n\nTransformer 架构自 2017 年 Vaswani 等人的论文 *\"Attention Is All You Need\"* 提出以来，已经成为自然语言处理乃至整个深度学习领域最重要的基础架构之一。\n\n本文将从数学原理出发，逐步推导 Transformer 的核心组件——**自注意力机制（Self-Attention）**。\n\n## Scaled Dot-Product Attention\n\n注意力机制的核心公式如下：\n\n<div className=\"my-6 p-4 bg-muted rounded-lg text-center font-serif text-lg\">\n\n**Attention(Q, K, V) = softmax(QKᵀ / √dₖ) · V**\n\n</div>\n\n其中：\n\n- **Q (Query)**：查询矩阵，形状为 n × dₖ\n- **K (Key)**：键矩阵，形状为 n × dₖ\n- **V (Value)**：值矩阵，形状为 n × dᵥ\n\n### 为什么需要缩放因子 √dₖ？\n\n当 dₖ 较大时，点积 QKᵀ 的值会变得很大，导致 softmax 函数的梯度进入极小区域。除以 √dₖ 可以缓解这个问题。\n\n## Multi-Head Attention\n\n多头注意力允许模型在不同的表示子空间中共同关注信息：\n\n```python\nimport torch\nimport torch.nn as nn\n\nclass MultiHeadAttention(nn.Module):\n    def __init__(self, d_model, num_heads):\n        super().__init__()\n        assert d_model % num_heads == 0\n\n        self.d_model = d_model\n        self.num_heads = num_heads\n        self.d_k = d_model // num_heads\n\n        self.W_q = nn.Linear(d_model, d_model)\n        self.W_k = nn.Linear(d_model, d_model)\n        self.W_v = nn.Linear(d_model, d_model)\n        self.W_o = nn.Linear(d_model, d_model)\n\n    def forward(self, Q, K, V, mask=None):\n        batch_size = Q.size(0)\n\n        # Linear projections and reshape for multi-head\n        Q = self.W_q(Q).view(batch_size, -1, self.num_heads, self.d_k).transpose(1, 2)\n        K = self.W_k(K).view(batch_size, -1, self.num_heads, self.d_k).transpose(1, 2)\n        V = self.W_v(V).view(batch_size, -1, self.num_heads, self.d_k).transpose(1, 2)\n\n        # Scaled Dot-Product Attention\n        scores = torch.matmul(Q, K.transpose(-2, -1)) / (self.d_k ** 0.5)\n\n        if mask is not None:\n            scores = scores.masked_fill(mask == 0, float('-inf'))\n\n        attention = torch.softmax(scores, dim=-1)\n        output = torch.matmul(attention, V)\n\n        # Concatenate heads and project\n        output = output.transpose(1, 2).contiguous().view(batch_size, -1, self.d_model)\n        return self.W_o(output)\n```\n\n## 关键要点总结\n\n| 组件 | 作用 | 关键参数 |\n|------|------|----------|\n| Query (Q) | 当前 token 想要查询的信息 | dₖ |\n| Key (K) | 当前 token 可以提供的信息 | dₖ |\n| Value (V) | 实际返回的信息内容 | dᵥ |\n| 缩放因子 | 防止 softmax 梯度消失 | √dₖ |\n| 多头 | 多子空间并行注意力 | h 个 head |\n\n> **核心思想**：每个 token 通过 Q 和所有 token 的 K 计算相似度，然后对 V 加权求和，实现全局信息交互。\n\n## 小结\n\nSelf-Attention 的巧妙之处在于：\n\n1. **并行计算**：可以同时计算所有位置的注意力权重\n2. **长程依赖**：任意两个位置之间的路径长度都是 O(1)\n3. **可解释性**：注意力权重可以可视化，帮助我们理解模型的决策\n\n这正是 Transformer 能够取代 RNN/LSTM 成为主流架构的根本原因。",
+      "html": "<h2>引言</h2>\n<p>Transformer 架构自 2017 年 Vaswani 等人的论文 <em>\"Attention Is All You Need\"</em> 提出以来，已经成为自然语言处理乃至整个深度学习领域最重要的基础架构之一。</p>\n<p>本文将从数学原理出发，逐步推导 Transformer 的核心组件——<strong>自注意力机制（Self-Attention）</strong>。</p>\n<h2>Scaled Dot-Product Attention</h2>\n<p>注意力机制的核心公式如下：</p>\n<p><strong>Attention(Q, K, V) = softmax(QKᵀ / √dₖ) · V</strong></p>\n<p>其中：</p>\n<ul>\n<li><strong>Q (Query)</strong>：查询矩阵，形状为 n × dₖ</li>\n<li><strong>K (Key)</strong>：键矩阵，形状为 n × dₖ</li>\n<li><strong>V (Value)</strong>：值矩阵，形状为 n × dᵥ</li>\n</ul>\n<h3>为什么需要缩放因子 √dₖ？</h3>\n<p>当 dₖ 较大时，点积 QKᵀ 的值会变得很大，导致 softmax 函数的梯度进入极小区域。除以 √dₖ 可以缓解这个问题。</p>\n<h2>Multi-Head Attention</h2>\n<p>多头注意力允许模型在不同的表示子空间中共同关注信息：</p>\n<pre><code class=\"language-python\">import torch\nimport torch.nn as nn\n\nclass MultiHeadAttention(nn.Module):\n    def __init__(self, d_model, num_heads):\n        super().__init__()\n        assert d_model % num_heads == 0\n\n        self.d_model = d_model\n        self.num_heads = num_heads\n        self.d_k = d_model // num_heads\n\n        self.W_q = nn.Linear(d_model, d_model)\n        self.W_k = nn.Linear(d_model, d_model)\n        self.W_v = nn.Linear(d_model, d_model)\n        self.W_o = nn.Linear(d_model, d_model)\n\n    def forward(self, Q, K, V, mask=None):\n        batch_size = Q.size(0)\n\n        # Linear projections and reshape for multi-head\n        Q = self.W_q(Q).view(batch_size, -1, self.num_heads, self.d_k).transpose(1, 2)\n        K = self.W_k(K).view(batch_size, -1, self.num_heads, self.d_k).transpose(1, 2)\n        V = self.W_v(V).view(batch_size, -1, self.num_heads, self.d_k).transpose(1, 2)\n\n        # Scaled Dot-Product Attention\n        scores = torch.matmul(Q, K.transpose(-2, -1)) / (self.d_k ** 0.5)\n\n        if mask is not None:\n            scores = scores.masked_fill(mask == 0, float('-inf'))\n\n        attention = torch.softmax(scores, dim=-1)\n        output = torch.matmul(attention, V)\n\n        # Concatenate heads and project\n        output = output.transpose(1, 2).contiguous().view(batch_size, -1, self.d_model)\n        return self.W_o(output)\n</code></pre>\n<h2>关键要点总结</h2>\n<p>| 组件 | 作用 | 关键参数 |\n|------|------|----------|\n| Query (Q) | 当前 token 想要查询的信息 | dₖ |\n| Key (K) | 当前 token 可以提供的信息 | dₖ |\n| Value (V) | 实际返回的信息内容 | dᵥ |\n| 缩放因子 | 防止 softmax 梯度消失 | √dₖ |\n| 多头 | 多子空间并行注意力 | h 个 head |</p>\n<blockquote>\n<p><strong>核心思想</strong>：每个 token 通过 Q 和所有 token 的 K 计算相似度，然后对 V 加权求和，实现全局信息交互。</p>\n</blockquote>\n<h2>小结</h2>\n<p>Self-Attention 的巧妙之处在于：</p>\n<ol>\n<li><strong>并行计算</strong>：可以同时计算所有位置的注意力权重</li>\n<li><strong>长程依赖</strong>：任意两个位置之间的路径长度都是 O(1)</li>\n<li><strong>可解释性</strong>：注意力权重可以可视化，帮助我们理解模型的决策</li>\n</ol>\n<p>这正是 Transformer 能够取代 RNN/LSTM 成为主流架构的根本原因。</p>"
+    },
+    "_id": "posts/transformer-attention.mdx",
+    "_raw": {
+      "sourceFilePath": "posts/transformer-attention.mdx",
+      "sourceFileName": "transformer-attention.mdx",
+      "sourceFileDir": "posts",
+      "contentType": "mdx",
+      "flattenedPath": "posts/transformer-attention"
+    },
+    "type": "Post",
+    "slug": "transformer-attention",
+    "readingTime": {
+      "text": "3 min read",
+      "minutes": 2.965,
+      "time": 177900,
+      "words": 593
+    }
+  }
+]

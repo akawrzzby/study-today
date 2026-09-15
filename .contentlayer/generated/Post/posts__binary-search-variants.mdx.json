@@ -1,0 +1,32 @@
+{
+  "title": "二分查找的变体与应用",
+  "date": "2025-02-28T00:00:00.000Z",
+  "description": "整理二分查找的常见变体：查找第一个等于 target 的位置、查找最后一个等于 target 的位置、查找第一个大于等于 target 的位置等。",
+  "tags": [
+    "算法",
+    "二分查找",
+    "搜索"
+  ],
+  "category": "算法笔记",
+  "published": true,
+  "body": {
+    "raw": "\n## 基本二分查找\n\n标准二分查找在一个**有序数组**中查找目标值：\n\n```python\ndef binary_search(nums, target):\n    left, right = 0, len(nums) - 1\n    while left <= right:\n        mid = left + (right - left) // 2\n        if nums[mid] == target:\n            return mid\n        elif nums[mid] < target:\n            left = mid + 1\n        else:\n            right = mid - 1\n    return -1\n```\n\n## 变体一：查找第一个等于 target 的位置\n\n当数组中存在重复元素时，找到**第一个**等于 target 的索引：\n\n```python\ndef find_first(nums, target):\n    left, right = 0, len(nums) - 1\n    result = -1\n    while left <= right:\n        mid = left + (right - left) // 2\n        if nums[mid] == target:\n            result = mid      # 记录当前找到的位置\n            right = mid - 1   # 继续向左搜索\n        elif nums[mid] < target:\n            left = mid + 1\n        else:\n            right = mid - 1\n    return result\n```\n\n## 变体二：查找第一个大于等于 target 的位置\n\n这是 C++ STL 中 `lower_bound` 的实现：\n\n```python\ndef lower_bound(nums, target):\n    left, right = 0, len(nums)\n    while left < right:\n        mid = left + (right - left) // 2\n        if nums[mid] < target:\n            left = mid + 1\n        else:\n            right = mid\n    return left  # 第一个 >= target 的位置\n```\n\n## 变体三：插值查找\n\n当数据分布均匀时，可以使用**插值查找**在 $O(\\log \\log n)$ 时间内定位：\n\n```python\ndef interpolation_search(nums, target):\n    left, right = 0, len(nums) - 1\n    while left <= right and nums[left] <= target <= nums[right]:\n        if nums[left] == nums[right]:\n            return left if nums[left] == target else -1\n\n        # 插值公式\n        pos = left + ((target - nums[left]) * (right - left)\n                      // (nums[right] - nums[left]))\n\n        if nums[pos] == target:\n            return pos\n        elif nums[pos] < target:\n            left = pos + 1\n        else:\n            right = pos - 1\n    return -1\n```\n\n> **注意**：插值查找在最坏情况下会退化到 $O(n)$，所以仅在数据分布均匀时使用。\n\n## 总结对比\n\n| 变体 | 目标 | 返回值 | 复杂度 |\n|------|------|--------|--------|\n| 标准二分 | 任意 target | 任意匹配索引 | $O(\\log n)$ |\n| find_first | 第一个 target | 最左匹配索引 | $O(\\log n)$ |\n| lower_bound | 第一个 >= target | 插入位置 | $O(\\log n)$ |\n| 插值查找 | 均匀分布 target | 匹配索引 | $O(\\log \\log n)$ 平均 |\n\n## 实践建议\n\n1. 默认使用标准二分，记住 `mid = left + (right - left) // 2` 防止溢出\n2. 遇到「查找第一个 / 最后一个」需求时，用 `result` 变量记录 + 继续搜索的模式\n3. `lower_bound` 和 `upper_bound` 是非常实用的工具函数，建议熟练掌握",
+    "html": "<h2>基本二分查找</h2>\n<p>标准二分查找在一个<strong>有序数组</strong>中查找目标值：</p>\n<pre><code class=\"language-python\">def binary_search(nums, target):\n    left, right = 0, len(nums) - 1\n    while left &#x3C;= right:\n        mid = left + (right - left) // 2\n        if nums[mid] == target:\n            return mid\n        elif nums[mid] &#x3C; target:\n            left = mid + 1\n        else:\n            right = mid - 1\n    return -1\n</code></pre>\n<h2>变体一：查找第一个等于 target 的位置</h2>\n<p>当数组中存在重复元素时，找到<strong>第一个</strong>等于 target 的索引：</p>\n<pre><code class=\"language-python\">def find_first(nums, target):\n    left, right = 0, len(nums) - 1\n    result = -1\n    while left &#x3C;= right:\n        mid = left + (right - left) // 2\n        if nums[mid] == target:\n            result = mid      # 记录当前找到的位置\n            right = mid - 1   # 继续向左搜索\n        elif nums[mid] &#x3C; target:\n            left = mid + 1\n        else:\n            right = mid - 1\n    return result\n</code></pre>\n<h2>变体二：查找第一个大于等于 target 的位置</h2>\n<p>这是 C++ STL 中 <code>lower_bound</code> 的实现：</p>\n<pre><code class=\"language-python\">def lower_bound(nums, target):\n    left, right = 0, len(nums)\n    while left &#x3C; right:\n        mid = left + (right - left) // 2\n        if nums[mid] &#x3C; target:\n            left = mid + 1\n        else:\n            right = mid\n    return left  # 第一个 >= target 的位置\n</code></pre>\n<h2>变体三：插值查找</h2>\n<p>当数据分布均匀时，可以使用<strong>插值查找</strong>在 $O(\\log \\log n)$ 时间内定位：</p>\n<pre><code class=\"language-python\">def interpolation_search(nums, target):\n    left, right = 0, len(nums) - 1\n    while left &#x3C;= right and nums[left] &#x3C;= target &#x3C;= nums[right]:\n        if nums[left] == nums[right]:\n            return left if nums[left] == target else -1\n\n        # 插值公式\n        pos = left + ((target - nums[left]) * (right - left)\n                      // (nums[right] - nums[left]))\n\n        if nums[pos] == target:\n            return pos\n        elif nums[pos] &#x3C; target:\n            left = pos + 1\n        else:\n            right = pos - 1\n    return -1\n</code></pre>\n<blockquote>\n<p><strong>注意</strong>：插值查找在最坏情况下会退化到 $O(n)$，所以仅在数据分布均匀时使用。</p>\n</blockquote>\n<h2>总结对比</h2>\n<p>| 变体 | 目标 | 返回值 | 复杂度 |\n|------|------|--------|--------|\n| 标准二分 | 任意 target | 任意匹配索引 | $O(\\log n)$ |\n| find_first | 第一个 target | 最左匹配索引 | $O(\\log n)$ |\n| lower_bound | 第一个 >= target | 插入位置 | $O(\\log n)$ |\n| 插值查找 | 均匀分布 target | 匹配索引 | $O(\\log \\log n)$ 平均 |</p>\n<h2>实践建议</h2>\n<ol>\n<li>默认使用标准二分，记住 <code>mid = left + (right - left) // 2</code> 防止溢出</li>\n<li>遇到「查找第一个 / 最后一个」需求时，用 <code>result</code> 变量记录 + 继续搜索的模式</li>\n<li><code>lower_bound</code> 和 <code>upper_bound</code> 是非常实用的工具函数，建议熟练掌握</li>\n</ol>"
+  },
+  "_id": "posts/binary-search-variants.mdx",
+  "_raw": {
+    "sourceFilePath": "posts/binary-search-variants.mdx",
+    "sourceFileName": "binary-search-variants.mdx",
+    "sourceFileDir": "posts",
+    "contentType": "mdx",
+    "flattenedPath": "posts/binary-search-variants"
+  },
+  "type": "Post",
+  "slug": "binary-search-variants",
+  "readingTime": {
+    "text": "3 min read",
+    "minutes": 2.78,
+    "time": 166800,
+    "words": 556
+  }
+}

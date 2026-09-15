@@ -1,0 +1,103 @@
+---
+title: "二分查找的变体与应用"
+date: 2025-02-28
+description: "整理二分查找的常见变体：查找第一个等于 target 的位置、查找最后一个等于 target 的位置、查找第一个大于等于 target 的位置等。"
+tags: ["算法", "二分查找", "搜索"]
+category: "算法笔记"
+published: true
+---
+
+## 基本二分查找
+
+标准二分查找在一个**有序数组**中查找目标值：
+
+```python
+def binary_search(nums, target):
+    left, right = 0, len(nums) - 1
+    while left <= right:
+        mid = left + (right - left) // 2
+        if nums[mid] == target:
+            return mid
+        elif nums[mid] < target:
+            left = mid + 1
+        else:
+            right = mid - 1
+    return -1
+```
+
+## 变体一：查找第一个等于 target 的位置
+
+当数组中存在重复元素时，找到**第一个**等于 target 的索引：
+
+```python
+def find_first(nums, target):
+    left, right = 0, len(nums) - 1
+    result = -1
+    while left <= right:
+        mid = left + (right - left) // 2
+        if nums[mid] == target:
+            result = mid      # 记录当前找到的位置
+            right = mid - 1   # 继续向左搜索
+        elif nums[mid] < target:
+            left = mid + 1
+        else:
+            right = mid - 1
+    return result
+```
+
+## 变体二：查找第一个大于等于 target 的位置
+
+这是 C++ STL 中 `lower_bound` 的实现：
+
+```python
+def lower_bound(nums, target):
+    left, right = 0, len(nums)
+    while left < right:
+        mid = left + (right - left) // 2
+        if nums[mid] < target:
+            left = mid + 1
+        else:
+            right = mid
+    return left  # 第一个 >= target 的位置
+```
+
+## 变体三：插值查找
+
+当数据分布均匀时，可以使用**插值查找**在 $O(\log \log n)$ 时间内定位：
+
+```python
+def interpolation_search(nums, target):
+    left, right = 0, len(nums) - 1
+    while left <= right and nums[left] <= target <= nums[right]:
+        if nums[left] == nums[right]:
+            return left if nums[left] == target else -1
+
+        # 插值公式
+        pos = left + ((target - nums[left]) * (right - left)
+                      // (nums[right] - nums[left]))
+
+        if nums[pos] == target:
+            return pos
+        elif nums[pos] < target:
+            left = pos + 1
+        else:
+            right = pos - 1
+    return -1
+```
+
+> **注意**：插值查找在最坏情况下会退化到 $O(n)$，所以仅在数据分布均匀时使用。
+
+## 总结对比
+
+| 变体 | 目标 | 返回值 | 复杂度 |
+|------|------|--------|--------|
+| 标准二分 | 任意 target | 任意匹配索引 | $O(\log n)$ |
+| find_first | 第一个 target | 最左匹配索引 | $O(\log n)$ |
+| lower_bound | 第一个 >= target | 插入位置 | $O(\log n)$ |
+| 插值查找 | 均匀分布 target | 匹配索引 | $O(\log \log n)$ 平均 |
+
+## 实践建议
+
+1. 默认使用标准二分，记住 `mid = left + (right - left) // 2` 防止溢出
+2. 遇到「查找第一个 / 最后一个」需求时，用 `result` 变量记录 + 继续搜索的模式
+3. `lower_bound` 和 `upper_bound` 是非常实用的工具函数，建议熟练掌握

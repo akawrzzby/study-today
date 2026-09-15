@@ -1,0 +1,119 @@
+---
+title: "梯度下降的三种形式：BGD、SGD、MBGD"
+date: 2025-02-10
+description: "详细对比批量梯度下降（BGD）、随机梯度下降（SGD）和小批量梯度下降（MBGD），从数学原理到代码实现。"
+tags: ["机器学习", "优化", "梯度下降"]
+category: "课程笔记"
+published: true
+---
+
+## 梯度下降的数学基础
+
+给定损失函数 J(θ)，梯度下降的更新规则为：
+
+<div className="my-4 p-3 bg-muted rounded-lg text-center font-serif">
+
+**θ := θ − α · ∇J(θ)**
+
+</div>
+
+其中 α 是学习率（learning rate），∇J(θ) 是损失函数关于参数 θ 的梯度。
+
+## 批量梯度下降 (BGD)
+
+**Batch Gradient Descent** 在每一步中使用**全部训练样本**计算梯度：
+
+```python
+def bgd(X, y, theta, alpha, epochs):
+    m = len(y)  # 总样本数
+    for epoch in range(epochs):
+        # 使用全部样本计算梯度
+        gradient = (1/m) * X.T @ (X @ theta - y)
+        theta = theta - alpha * gradient
+    return theta
+```
+
+**特点**：
+- 每步都使用全部数据，梯度方向最准确
+- 计算量大，大数据集下慢
+- 收敛稳定，不会震荡
+
+## 随机梯度下降 (SGD)
+
+**Stochastic Gradient Descent** 每一步只使用**一个随机样本**：
+
+```python
+import numpy as np
+
+def sgd(X, y, theta, alpha, epochs):
+    m = len(y)
+    for epoch in range(epochs):
+        for i in range(m):
+            # 随机选一个样本
+            idx = np.random.randint(0, m)
+            xi = X[idx:idx+1]
+            yi = y[idx:idx+1]
+            # 单样本梯度
+            gradient = xi.T @ (xi @ theta - yi)
+            theta = theta - alpha * gradient
+    return theta
+```
+
+**特点**：
+- 每步只用一个样本，计算极快
+- 梯度方向有噪声，训练会震荡
+- 噪声有助于跳出局部最小值
+- 最终在最小值附近摇摆不定
+
+## 小批量梯度下降 (MBGD)
+
+**Mini-Batch Gradient Descent** 是前两者的折中——每步使用一个小批量（batch）样本：
+
+```python
+def mbgd(X, y, theta, alpha, epochs, batch_size=32):
+    m = len(y)
+    for epoch in range(epochs):
+        # 随机打乱数据
+        indices = np.random.permutation(m)
+        X_shuffled = X[indices]
+        y_shuffled = y[indices]
+
+        for i in range(0, m, batch_size):
+            # 取一个 batch
+            X_batch = X_shuffled[i:i+batch_size]
+            y_batch = y_shuffled[i:i+batch_size]
+            # 计算 batch 梯度
+            gradient = (1/batch_size) * X_batch.T @ (X_batch @ theta - y_batch)
+            theta = theta - alpha * gradient
+    return theta
+```
+
+## 对比总结
+
+| 方法 | 每步样本数 | 计算速度 | 梯度质量 | 收敛行为 |
+|------|-----------|----------|----------|----------|
+| BGD | 全部 (N) | 慢 | 精确 | 稳定下降 |
+| SGD | 1 个 | 极快 | 噪声大 | 震荡但快 |
+| MBGD | 批量 (B) | 中等 | 较好 | 折中 |
+
+> **实践建议**：实际项目中几乎总是使用 **MBGD**，batch size 通常设为 32、64 或 128。这个大小既可以利用 GPU 并行计算能力，又能获得较好的梯度估计。
+
+## Momentum 与 Adam
+
+现代优化器（如 Adam）在 MBGD 基础上加入了动量和自适应学习率：
+
+- **Momentum（动量）**：积累历史梯度方向来加速收敛
+
+<div className="my-4 p-3 bg-muted rounded-lg text-center font-serif">
+
+**vₜ = β · vₜ₋₁ + (1 − β) · ∇J(θ)**
+**θ := θ − α · vₜ**
+
+</div>
+
+- **Adam**：结合 Momentum 和 RMSprop，是目前最流行的优化器
+
+```python
+import torch.optim as optim
+optimizer = optim.Adam(model.parameters(), lr=0.001)
+```

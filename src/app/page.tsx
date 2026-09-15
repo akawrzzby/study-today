@@ -1,69 +1,79 @@
-import Image from "next/image";
+import { getPosts, getAllCategories } from "@/lib/posts";
+import { PostCard } from "@/components/PostCard";
+import Link from "next/link";
 
 export default function Home() {
+  const posts = getPosts();
+  const categories = getAllCategories();
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert h-5 w-[100px]"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the{" "}
-            <code className="rounded bg-black/[.06] px-1.5 py-0.5 font-mono text-[0.9em] dark:bg-white/[.08]">
-              page.tsx
-            </code>{" "}
-            file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
+    <div className="mx-auto max-w-5xl px-6 py-12 sm:py-16">
+      {/* Hero */}
+      <section className="mb-16">
+        <h1 className="font-serif text-4xl sm:text-5xl font-bold text-foreground tracking-tight">
+          今天学了吗
+        </h1>
+        <p className="mt-4 text-lg text-muted-foreground max-w-2xl">
+          记录课程笔记、论文阅读、算法学习。
+          <br />
+          以瑞士现代主义设计为灵感，专注内容，理性排版。
+        </p>
+        <div className="mt-6 flex flex-wrap items-center gap-3">
+          {categories.slice(0, 6).map(({ category, count }) => (
+            <Link
+              key={category}
+              href={`/categories/${encodeURIComponent(category)}`}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium border bg-card hover:bg-muted hover:border-primary/30 transition-all duration-200 no-underline"
             >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
+              <span>{category}</span>
+              <span className="text-xs text-muted-foreground">{count}</span>
+            </Link>
+          ))}
+        </div>
+      </section>
+
+      {/* Posts Grid */}
+      <section>
+        <div className="flex items-center justify-between mb-8">
+          <h2 className="font-serif text-2xl font-semibold">最新文章</h2>
+          <Link
+            href="/search"
+            className="text-sm text-muted-foreground hover:text-foreground transition-colors no-underline flex items-center gap-1"
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth={2}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className="h-4 w-4"
+              aria-hidden="true"
             >
-              Learning
-            </a>{" "}
-            center.
-          </p>
+              <circle cx="11" cy="11" r="8" />
+              <path d="M21 21l-4.3-4.3" />
+            </svg>
+            搜索文章
+          </Link>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert h-[14px] w-4"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={14}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
+
+        {posts.length === 0 ? (
+          <div className="text-center py-16 text-muted-foreground">
+            <p className="text-lg">还没有文章</p>
+            <p className="mt-2 text-sm">
+              在 <code className="bg-muted px-1.5 py-0.5 rounded text-xs">content/posts/</code>{" "}
+              中添加你的第一篇 MDX 文章
+            </p>
+          </div>
+        ) : (
+          <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
+            {posts.map((post) => (
+              <PostCard key={post.slug} post={post} />
+            ))}
+          </div>
+        )}
+      </section>
     </div>
   );
 }

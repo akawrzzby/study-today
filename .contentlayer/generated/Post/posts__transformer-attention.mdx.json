@@ -1,0 +1,33 @@
+{
+  "title": "Transformer 注意力机制详解",
+  "date": "2025-03-15T00:00:00.000Z",
+  "description": "深入理解 Transformer 中的自注意力机制（Self-Attention），从 Scaled Dot-Product Attention 到 Multi-Head Attention 的完整推导。",
+  "tags": [
+    "深度学习",
+    "NLP",
+    "Transformer",
+    "Attention"
+  ],
+  "category": "论文笔记",
+  "published": true,
+  "body": {
+    "raw": "\n## 引言\n\nTransformer 架构自 2017 年 Vaswani 等人的论文 *\"Attention Is All You Need\"* 提出以来，已经成为自然语言处理乃至整个深度学习领域最重要的基础架构之一。\n\n本文将从数学原理出发，逐步推导 Transformer 的核心组件——**自注意力机制（Self-Attention）**。\n\n## Scaled Dot-Product Attention\n\n注意力机制的核心公式如下：\n\n<div className=\"my-6 p-4 bg-muted rounded-lg text-center font-serif text-lg\">\n\n**Attention(Q, K, V) = softmax(QKᵀ / √dₖ) · V**\n\n</div>\n\n其中：\n\n- **Q (Query)**：查询矩阵，形状为 n × dₖ\n- **K (Key)**：键矩阵，形状为 n × dₖ\n- **V (Value)**：值矩阵，形状为 n × dᵥ\n\n### 为什么需要缩放因子 √dₖ？\n\n当 dₖ 较大时，点积 QKᵀ 的值会变得很大，导致 softmax 函数的梯度进入极小区域。除以 √dₖ 可以缓解这个问题。\n\n## Multi-Head Attention\n\n多头注意力允许模型在不同的表示子空间中共同关注信息：\n\n```python\nimport torch\nimport torch.nn as nn\n\nclass MultiHeadAttention(nn.Module):\n    def __init__(self, d_model, num_heads):\n        super().__init__()\n        assert d_model % num_heads == 0\n\n        self.d_model = d_model\n        self.num_heads = num_heads\n        self.d_k = d_model // num_heads\n\n        self.W_q = nn.Linear(d_model, d_model)\n        self.W_k = nn.Linear(d_model, d_model)\n        self.W_v = nn.Linear(d_model, d_model)\n        self.W_o = nn.Linear(d_model, d_model)\n\n    def forward(self, Q, K, V, mask=None):\n        batch_size = Q.size(0)\n\n        # Linear projections and reshape for multi-head\n        Q = self.W_q(Q).view(batch_size, -1, self.num_heads, self.d_k).transpose(1, 2)\n        K = self.W_k(K).view(batch_size, -1, self.num_heads, self.d_k).transpose(1, 2)\n        V = self.W_v(V).view(batch_size, -1, self.num_heads, self.d_k).transpose(1, 2)\n\n        # Scaled Dot-Product Attention\n        scores = torch.matmul(Q, K.transpose(-2, -1)) / (self.d_k ** 0.5)\n\n        if mask is not None:\n            scores = scores.masked_fill(mask == 0, float('-inf'))\n\n        attention = torch.softmax(scores, dim=-1)\n        output = torch.matmul(attention, V)\n\n        # Concatenate heads and project\n        output = output.transpose(1, 2).contiguous().view(batch_size, -1, self.d_model)\n        return self.W_o(output)\n```\n\n## 关键要点总结\n\n| 组件 | 作用 | 关键参数 |\n|------|------|----------|\n| Query (Q) | 当前 token 想要查询的信息 | dₖ |\n| Key (K) | 当前 token 可以提供的信息 | dₖ |\n| Value (V) | 实际返回的信息内容 | dᵥ |\n| 缩放因子 | 防止 softmax 梯度消失 | √dₖ |\n| 多头 | 多子空间并行注意力 | h 个 head |\n\n> **核心思想**：每个 token 通过 Q 和所有 token 的 K 计算相似度，然后对 V 加权求和，实现全局信息交互。\n\n## 小结\n\nSelf-Attention 的巧妙之处在于：\n\n1. **并行计算**：可以同时计算所有位置的注意力权重\n2. **长程依赖**：任意两个位置之间的路径长度都是 O(1)\n3. **可解释性**：注意力权重可以可视化，帮助我们理解模型的决策\n\n这正是 Transformer 能够取代 RNN/LSTM 成为主流架构的根本原因。",
+    "html": "<h2>引言</h2>\n<p>Transformer 架构自 2017 年 Vaswani 等人的论文 <em>\"Attention Is All You Need\"</em> 提出以来，已经成为自然语言处理乃至整个深度学习领域最重要的基础架构之一。</p>\n<p>本文将从数学原理出发，逐步推导 Transformer 的核心组件——<strong>自注意力机制（Self-Attention）</strong>。</p>\n<h2>Scaled Dot-Product Attention</h2>\n<p>注意力机制的核心公式如下：</p>\n<p><strong>Attention(Q, K, V) = softmax(QKᵀ / √dₖ) · V</strong></p>\n<p>其中：</p>\n<ul>\n<li><strong>Q (Query)</strong>：查询矩阵，形状为 n × dₖ</li>\n<li><strong>K (Key)</strong>：键矩阵，形状为 n × dₖ</li>\n<li><strong>V (Value)</strong>：值矩阵，形状为 n × dᵥ</li>\n</ul>\n<h3>为什么需要缩放因子 √dₖ？</h3>\n<p>当 dₖ 较大时，点积 QKᵀ 的值会变得很大，导致 softmax 函数的梯度进入极小区域。除以 √dₖ 可以缓解这个问题。</p>\n<h2>Multi-Head Attention</h2>\n<p>多头注意力允许模型在不同的表示子空间中共同关注信息：</p>\n<pre><code class=\"language-python\">import torch\nimport torch.nn as nn\n\nclass MultiHeadAttention(nn.Module):\n    def __init__(self, d_model, num_heads):\n        super().__init__()\n        assert d_model % num_heads == 0\n\n        self.d_model = d_model\n        self.num_heads = num_heads\n        self.d_k = d_model // num_heads\n\n        self.W_q = nn.Linear(d_model, d_model)\n        self.W_k = nn.Linear(d_model, d_model)\n        self.W_v = nn.Linear(d_model, d_model)\n        self.W_o = nn.Linear(d_model, d_model)\n\n    def forward(self, Q, K, V, mask=None):\n        batch_size = Q.size(0)\n\n        # Linear projections and reshape for multi-head\n        Q = self.W_q(Q).view(batch_size, -1, self.num_heads, self.d_k).transpose(1, 2)\n        K = self.W_k(K).view(batch_size, -1, self.num_heads, self.d_k).transpose(1, 2)\n        V = self.W_v(V).view(batch_size, -1, self.num_heads, self.d_k).transpose(1, 2)\n\n        # Scaled Dot-Product Attention\n        scores = torch.matmul(Q, K.transpose(-2, -1)) / (self.d_k ** 0.5)\n\n        if mask is not None:\n            scores = scores.masked_fill(mask == 0, float('-inf'))\n\n        attention = torch.softmax(scores, dim=-1)\n        output = torch.matmul(attention, V)\n\n        # Concatenate heads and project\n        output = output.transpose(1, 2).contiguous().view(batch_size, -1, self.d_model)\n        return self.W_o(output)\n</code></pre>\n<h2>关键要点总结</h2>\n<p>| 组件 | 作用 | 关键参数 |\n|------|------|----------|\n| Query (Q) | 当前 token 想要查询的信息 | dₖ |\n| Key (K) | 当前 token 可以提供的信息 | dₖ |\n| Value (V) | 实际返回的信息内容 | dᵥ |\n| 缩放因子 | 防止 softmax 梯度消失 | √dₖ |\n| 多头 | 多子空间并行注意力 | h 个 head |</p>\n<blockquote>\n<p><strong>核心思想</strong>：每个 token 通过 Q 和所有 token 的 K 计算相似度，然后对 V 加权求和，实现全局信息交互。</p>\n</blockquote>\n<h2>小结</h2>\n<p>Self-Attention 的巧妙之处在于：</p>\n<ol>\n<li><strong>并行计算</strong>：可以同时计算所有位置的注意力权重</li>\n<li><strong>长程依赖</strong>：任意两个位置之间的路径长度都是 O(1)</li>\n<li><strong>可解释性</strong>：注意力权重可以可视化，帮助我们理解模型的决策</li>\n</ol>\n<p>这正是 Transformer 能够取代 RNN/LSTM 成为主流架构的根本原因。</p>"
+  },
+  "_id": "posts/transformer-attention.mdx",
+  "_raw": {
+    "sourceFilePath": "posts/transformer-attention.mdx",
+    "sourceFileName": "transformer-attention.mdx",
+    "sourceFileDir": "posts",
+    "contentType": "mdx",
+    "flattenedPath": "posts/transformer-attention"
+  },
+  "type": "Post",
+  "slug": "transformer-attention",
+  "readingTime": {
+    "text": "3 min read",
+    "minutes": 2.965,
+    "time": 177900,
+    "words": 593
+  }
+}

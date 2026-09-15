@@ -18,10 +18,10 @@ export default function GiscusComments() {
 
     const script = document.createElement("script");
     script.src = "https://giscus.app/client.js";
-    script.setAttribute("data-repo", "OWNER/REPO"); // TODO: Replace with your repo
-    script.setAttribute("data-repo-id", "REPO_ID"); // TODO: Replace with your repo id
+    script.setAttribute("data-repo", "akawrzzby/study-today");
+    script.setAttribute("data-repo-id", "R_kgDOUb-Xfw");
     script.setAttribute("data-category", "Announcements");
-    script.setAttribute("data-category-id", "CATEGORY_ID"); // TODO: Replace
+    script.setAttribute("data-category-id", "DIC_kwDOUb-Xf84DFqa9");
     script.setAttribute("data-mapping", "pathname");
     script.setAttribute("data-strict", "0");
     script.setAttribute("data-reactions-enabled", "1");
@@ -37,7 +37,7 @@ export default function GiscusComments() {
 
   return (
     <div className="mt-12">
-      <h3 className="font-serif text-xl font-semibold mb-6">评论</h3>
+      <h3 className="font-serif text-xl font-semibold mb-6">璇勮</h3>
       <div ref={ref} />
     </div>
   );

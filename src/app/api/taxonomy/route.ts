@@ -1,15 +1,28 @@
 import { NextRequest, NextResponse } from "next/server";
-import fs from "fs";
-import path from "path";
+import { createClient } from "@supabase/supabase-js";
 
-const TAXONOMY_PATH = path.join(process.cwd(), "content", "taxonomy.json");
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL || "",
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ""
+);
 
 // GET: 读取 taxonomy
 export async function GET() {
   try {
-    const raw = fs.readFileSync(TAXONOMY_PATH, "utf-8");
-    const data = JSON.parse(raw);
-    return NextResponse.json(data);
+    const { data } = await supabase
+      .from("taxonomy")
+      .select("*")
+      .eq("id", "main")
+      .single();
+
+    if (data) {
+      return NextResponse.json({
+        categories: data.categories || [],
+        tags: data.tags || [],
+      });
+    }
+
+    return NextResponse.json({ categories: [], tags: [] });
   } catch {
     return NextResponse.json(
       { error: "Failed to read taxonomy" },
@@ -23,7 +36,6 @@ export async function PUT(request: NextRequest) {
   try {
     const body = await request.json();
 
-    // 验证格式
     if (!body.categories || !body.tags || !Array.isArray(body.categories) || !Array.isArray(body.tags)) {
       return NextResponse.json(
         { error: "Invalid taxonomy format" },
@@ -31,7 +43,6 @@ export async function PUT(request: NextRequest) {
       );
     }
 
-    // 确保每个 item 有 name 和 slug
     for (const item of [...body.categories, ...body.tags]) {
       if (typeof item.name !== "string" || typeof item.slug !== "string") {
         return NextResponse.json(
@@ -41,11 +52,20 @@ export async function PUT(request: NextRequest) {
       }
     }
 
-    // 写入文件
-    const json = JSON.stringify(body, null, 2) + "\n";
-    fs.writeFileSync(TAXONOMY_PATH, json, "utf-8");
+    const { error } = await supabase
+      .from("taxonomy")
+      .upsert({
+        id: "main",
+        categories: body.categories,
+        tags: body.tags,
+        updated_at: new Date().toISOString(),
+      });
 
-    return NextResponse.json({ success: true, data: body });
+    if (error) {
+      return NextResponse.json({ error: error.message }, { status: 500 });
+    }
+
+    return NextResponse.json({ success: true, data: { categories: body.categories, tags: body.tags } });
   } catch {
     return NextResponse.json(
       { error: "Failed to update taxonomy" },

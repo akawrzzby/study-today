@@ -1,4 +1,5 @@
 import { getAllTags } from "@/lib/posts";
+import AdminPanelWrapper from "@/components/AdminPanelWrapper";
 import Link from "next/link";
 
 export const metadata = {
@@ -10,7 +11,6 @@ export default function TagsPage() {
   const tags = getAllTags();
   const maxCount = tags.length > 0 ? tags[0].count : 1;
 
-  // Font size scale based on tag count
   function getFontSize(count: number): string {
     const ratio = count / maxCount;
     if (ratio > 0.8) return "text-lg";
@@ -21,6 +21,8 @@ export default function TagsPage() {
 
   return (
     <div className="mx-auto max-w-3xl px-6 py-12 sm:py-16">
+      <AdminPanelWrapper />
+
       <h1 className="font-serif text-3xl sm:text-4xl font-bold text-foreground mb-2">
         标签
       </h1>

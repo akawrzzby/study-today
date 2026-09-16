@@ -1,4 +1,5 @@
 import { getAllCategories } from "@/lib/posts";
+import AdminPanelWrapper from "@/components/AdminPanelWrapper";
 import Link from "next/link";
 
 export const metadata = {
@@ -11,6 +12,8 @@ export default function CategoriesPage() {
 
   return (
     <div className="mx-auto max-w-3xl px-6 py-12 sm:py-16">
+      <AdminPanelWrapper />
+
       <h1 className="font-serif text-3xl sm:text-4xl font-bold text-foreground mb-2">
         分类
       </h1>

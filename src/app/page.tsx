@@ -1,5 +1,6 @@
 import { getPosts, getAllCategories } from "@/lib/posts";
 import { PostCard } from "@/components/PostCard";
+import AdminPanelWrapper from "@/components/AdminPanelWrapper";
 import Link from "next/link";
 
 export default function Home() {
@@ -8,6 +9,9 @@ export default function Home() {
 
   return (
     <div className="mx-auto max-w-5xl px-6 py-12 sm:py-16">
+      {/* Admin Panel (only visible when logged in) */}
+      <AdminPanelWrapper />
+
       {/* Hero */}
       <section className="mb-16">
         <h1 className="font-serif text-4xl sm:text-5xl font-bold text-foreground tracking-tight">

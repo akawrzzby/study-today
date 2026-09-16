@@ -1,0 +1,19 @@
+{
+  "categories": [
+    { "name": "论文笔记", "slug": "论文笔记" },
+    { "name": "算法笔记", "slug": "算法笔记" },
+    { "name": "课程笔记", "slug": "课程笔记" }
+  ],
+  "tags": [
+    { "name": "深度学习", "slug": "深度学习" },
+    { "name": "NLP", "slug": "NLP" },
+    { "name": "Transformer", "slug": "Transformer" },
+    { "name": "Attention", "slug": "Attention" },
+    { "name": "算法", "slug": "算法" },
+    { "name": "二分查找", "slug": "二分查找" },
+    { "name": "搜索", "slug": "搜索" },
+    { "name": "机器学习", "slug": "机器学习" },
+    { "name": "优化", "slug": "优化" },
+    { "name": "梯度下降", "slug": "梯度下降" }
+  ]
+}

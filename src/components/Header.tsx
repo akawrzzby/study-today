@@ -5,7 +5,9 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useTheme } from "./ThemeProvider";
 import { useAuth } from "./AuthProvider";
+import { useUserAuth } from "./UserAuthProvider";
 import LoginModal from "./LoginModal";
+import AuthModal from "./AuthModal";
 
 function NavLink({ href, children }: { href: string; children: React.ReactNode }) {
   const pathname = usePathname();
@@ -28,7 +30,9 @@ function NavLink({ href, children }: { href: string; children: React.ReactNode }
 export default function Header() {
   const { theme, toggleTheme } = useTheme();
   const { isAdmin, logout } = useAuth();
+  const { user, profile, signOut } = useUserAuth();
   const [loginOpen, setLoginOpen] = useState(false);
+  const [authOpen, setAuthOpen] = useState(false);
 
   return (
     <>
@@ -51,6 +55,53 @@ export default function Header() {
 
           {/* Right side */}
           <div className="flex items-center gap-1">
+            {/* User auth button */}
+            {user ? (
+              <button
+                onClick={() => signOut()}
+                className="flex items-center gap-1 px-3 py-2 rounded-md text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-colors cursor-pointer"
+                aria-label="退出登录"
+                title={`当前用户: ${profile?.username || user.email}`}
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth={2}
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  className="h-4 w-4"
+                  aria-hidden="true"
+                >
+                  <path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4-4v2M12 3a4 4 0 100 8 4 4 0 000-8z" />
+                </svg>
+                <span className="hidden sm:inline">{profile?.username || "用户"}</span>
+              </button>
+            ) : (
+              <button
+                onClick={() => setAuthOpen(true)}
+                className="flex items-center gap-1 px-3 py-2 rounded-md text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-colors cursor-pointer"
+                aria-label="用户登录/注册"
+                title="登录/注册"
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth={2}
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  className="h-4 w-4"
+                  aria-hidden="true"
+                >
+                  <path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4-4v2M12 3a4 4 0 100 8 4 4 0 000-8z" />
+                </svg>
+                <span className="hidden sm:inline">登录</span>
+              </button>
+            )}
+
             {/* Admin indicator / login button */}
             {isAdmin ? (
               <button
@@ -166,8 +217,10 @@ export default function Header() {
         </div>
       </header>
 
-      {/* Login Modal */}
+      {/* Login Modal (admin) */}
       <LoginModal isOpen={loginOpen} onClose={() => setLoginOpen(false)} />
+      {/* Auth Modal (user login/register) */}
+      <AuthModal isOpen={authOpen} onClose={() => setAuthOpen(false)} />
     </>
   );
 }

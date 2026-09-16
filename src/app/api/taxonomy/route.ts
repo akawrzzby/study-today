@@ -1,25 +1,32 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL || "",
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ""
-);
+const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
+const SUPABASE_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
+
+function headers() {
+  return {
+    apikey: SUPABASE_KEY,
+    Authorization: `Bearer ${SUPABASE_KEY}`,
+    "Content-Type": "application/json",
+    Prefer: "return=representation",
+  };
+}
 
 // GET: 读取 taxonomy
 export async function GET() {
   try {
-    const { data } = await supabase
-      .from("taxonomy")
-      .select("*")
-      .eq("id", "main")
-      .single();
+    const res = await fetch(
+      `${SUPABASE_URL}/rest/v1/taxonomy?id=eq.main&select=*`,
+      { headers: headers() }
+    );
+    const rows = await res.json();
 
-    if (data) {
-      return NextResponse.json({
-        categories: data.categories || [],
-        tags: data.tags || [],
-      });
+    if (rows && rows.length > 0) {
+      const row = rows[0];
+      // JSONB 字段在 REST API 中已经是对象
+      const categories = Array.isArray(row.categories) ? row.categories : [];
+      const tags = Array.isArray(row.tags) ? row.tags : [];
+      return NextResponse.json({ categories, tags });
     }
 
     return NextResponse.json({ categories: [], tags: [] });
@@ -52,23 +59,28 @@ export async function PUT(request: NextRequest) {
       }
     }
 
-    const { error } = await supabase
-      .from("taxonomy")
-      .upsert({
-        id: "main",
-        categories: body.categories,
-        tags: body.tags,
-        updated_at: new Date().toISOString(),
-      });
+    const res = await fetch(
+      `${SUPABASE_URL}/rest/v1/taxonomy?id=eq.main`,
+      {
+        method: "PATCH",
+        headers: { ...headers(), Prefer: "return=representation" },
+        body: JSON.stringify({
+          categories: body.categories,
+          tags: body.tags,
+          updated_at: new Date().toISOString(),
+        }),
+      }
+    );
 
-    if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 });
+    if (!res.ok) {
+      const errText = await res.text();
+      return NextResponse.json({ error: errText }, { status: 500 });
     }
 
     return NextResponse.json({ success: true, data: { categories: body.categories, tags: body.tags } });
-  } catch {
+  } catch (e: any) {
     return NextResponse.json(
-      { error: "Failed to update taxonomy" },
+      { error: e.message || "Failed to update taxonomy" },
       { status: 500 }
     );
   }

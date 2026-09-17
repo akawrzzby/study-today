@@ -7,7 +7,7 @@ import remarkGfm from "remark-gfm";
 
 export const Post = defineDocumentType(() => ({
   name: "Post",
-  filePathPattern: `posts/**/*.mdx`,
+  filePathPattern: `posts/**/*.{md,mdx}`,
   contentType: "markdown",
   fields: {
     title: { type: "string", required: true },
@@ -32,7 +32,7 @@ export const Post = defineDocumentType(() => ({
 export default makeSource({
   contentDirPath: "content",
   documentTypes: [Post],
-  mdx: {
+  markdown: {
     remarkPlugins: [remarkGfm],
     rehypePlugins: [
       rehypeSlug,

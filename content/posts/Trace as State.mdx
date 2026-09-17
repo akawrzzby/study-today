@@ -1,0 +1,1124 @@
+
+---
+title: "论文阅读笔记：Trace as State —— 将推理痕迹视为条件状态，服务于长上下文 Transformer"
+date: 2026-09-17
+description: "提出 TRACE AS STATE——一种通用的推理期缩放方法：把第一遍生成的推理痕迹序列化为文本状态代理 T，在第二遍新因果 pass 中放在长上下文之前（[T, x]）；pass 之间增加文本反馈，pass 内部保持因果处理，不需要训练或改架构"
+tags: ["智能体优化", "Transformer"]
+category: "论文笔记"
+published: true
+---
+
+
+# 论文阅读笔记：Trace as State —— 将推理痕迹视为条件状态，服务于长上下文 Transformer
+
+> 本笔记依据论文原文（arXiv:2609.02702v1, 2026-09-02）撰写。所有数字、公式、图表内容均来自论文原文；论文未披露的信息标注「论文原文未披露该信息」。
+
+## 基本信息
+
+| 项目 | 内容 |
+|---|---|
+| 标题 | Trace as State: Reasoning Traces as Conditional States for Long-Context Transformers（将推理痕迹视为条件状态：面向长上下文 Transformer） |
+| 作者 | Xu Zou（邹旭）¹、Jie Tang（唐杰）² |
+| 单位 | ¹Z.ai（智谱 AI）；²清华大学（Tsinghua University） |
+| 期刊/会议 | arXiv 预印本（cs.CL 计算语言学方向） |
+| 年份 | 2026（v1 提交于 2026 年 9 月 2 日） |
+| DOI/arXiv | arXiv:2609.02702v1 [cs.CL] |
+| 论文类型 | 技术方法 + 实证研究（提出一种推理期方法，并附带理论最坏情况分析与大规模实验） |
+
+## 概述
+
+### 研究背景
+
+前沿大语言模型的输入长度已扩展到数十万乃至上百万 token，稀疏注意力、压缩注意力、混合序列建模等架构进步显著扩大了模型的标称上下文窗口。然而，**自回归 Transformer 始终保留因果注意力**：出现在后面的信息对后续推理与答案生成可用，但**无法影响同一遍扫描（pass）中较早位置已经形成的表示**。这就产生了一个结构性困难——**输入顺序与推理顺序不匹配**：很多长上下文任务要求解题者维护"任务相关状态"（如活动目标、搜索前沿、被拒绝假设集合等），而部分状态只有在处理完上下文早期内容之后才会被意识到。
+
+### 研究意义
+
+- **理论价值**：用"条件状态更新任务"（conditional state update tasks）这一抽象形式化刻画了因果处理器的顺序不对称性，证明在**最坏情况下**条件在前与条件在后两种输入顺序的内存需求存在**指数级差距**（⌈b⌉ vs ⌈b·2^b⌉ 比特）。
+- **应用价值**：提出 TRACE AS STATE——一种通用的**推理期缩放（inference scaling）方法**，仅通过改变提示中文本的排列顺序，就在 3 个前沿模型 × 3 个长上下文基准上以 26/27 的组合全面超越对照方法，无需任何模型训练或架构改动。
+
+### 研究现象
+
+- **现象 1（理论）**：因果状态更新处理器在"条件先来"与"条件后来"两种顺序下，最坏情况下工作内存需求呈指数级差异。
+- **现象 2（实证）**：现代推理模型（如 DeepSeek V4 Pro、GLM-5.2、Qwen 3.7 Max）在生成可见答案之前会输出一段"推理痕迹"（reasoning trace）文本，这段文本是**可观测的、不完美的任务状态文本代理**。把它放在长上下文**之前**重新喂给模型，比放在上下文**之后**更能提升长上下文推理表现。
+
+### 研究目的
+
+作者想要回答的核心问题：**在保持每个 pass 内部因果处理不变的前提下，能否把"上一轮推理中才被发现的任务状态"提前到下一轮长上下文之前，从而缓解因果 Transformer 输入顺序与推理顺序的错配？** 具体而言：把推理痕迹作为任务状态的文本代理放在上下文之前（TRACE AS STATE），是否比放在上下文之后（TRACE APPEND）更有效？
+
+### 创新点
+
+1. **新理论抽象**：首次用"条件状态更新任务 + 残差映射计数"刻画因果处理器的顺序内存分离，给出最坏情况指数级差距的构造性证明（Appendix A）。
+2. **新方法**：提出 TRACE AS STATE——两遍（two-pass）推理流程：第一遍生成推理痕迹，序列化为 T，第二遍以 [T, x] 顺序（状态在前、上下文在后）重新处理任务；并配套设计了严格对照 TRACE APPEND（[x, T]）。
+3. **新实证结论**：在 3 个不同厂商的百万级上下文模型、3 个长上下文任务族上，27 个模型×任务×指标组合中 TRACE AS STATE 以 26/27 胜出，且排除了"通用格式脚手架""见过第一遍答案""文本近因效应"等替代解释。
+
+### 研究过程（步骤拆解）
+
+1. **形式化**：定义因果状态更新处理器与条件状态更新任务（§3.1）。
+2. **理论分析**：证明条件在后 [C, z] 最坏需要 ⌈|S| log₂|S|⌉ 比特内存，条件在前 [z, C] 只需 ⌈log₂|S|⌉ 比特；给出达到最坏情况的构造（Appendix A）。
+3. **方法设计**：将推理痕迹 r₁…rₙtr 序列化为 T = π(r₁,…,rₙtr)，提出 TRACE AS STATE（[T, x, q]）与对照 TRACE APPEND（[x, T, q]）（§3.2-3.3）。
+4. **主实验**：3 模型 × 3 基准，比较 First Pass / TRACE APPEND / TRACE AS STATE 三种条件（§4.2）。
+5. **消融实验**：在 DeepSeek V4 Pro + GraphWalks 256K 上比较 9 种提示条件，排除替代解释（§4.3）。
+6. **Trace 数量消融**：ntr 从 1 到 5 变化，检验"痕迹数量"作为推理期缩放参数（§4.4）。
+7. **辅助分析**：按 BFS 深度/父节点数分层的增益画像（Appendix D）、成对置信区间（Appendix E）、token 用量（Appendix F）。
+
+### 核心公式详解
+
+#### 公式 1（因果状态更新规则）
+
+- **公式**：`si = U(si−1, ci)，i = 1, …, n`
+- **输入/输出**：输入为前一个任务状态 sᵢ₋₁ 与第 i 个信息单元 cᵢ，输出为更新后的任务状态 sᵢ。
+- **符号逐一解释**：
+  - `sᵢ`：处理完 c₁,…,cᵢ 之后处理器到达的任务状态，取值于有限状态空间 S；
+  - `s₀`：初始状态（固定值，或由条件 z 指定）；
+  - `U`：固定的因果状态更新规则（确定性函数 U: S × C → S），是处理器"知道"的规则；
+  - `cᵢ`：有序信息序列 C = (c₁,…,cₙ) 中的第 i 个单元；
+  - `n`：信息序列长度。
+- **原理**：这是"因果"的本质——每个时刻的新状态只依赖当前记忆（sᵢ₋₁）和刚收到的单元（cᵢ），不依赖未来输入。这与因果 Transformer 的逐 token 处理一致。
+- **作用**：为全文的内存分析提供底层计算模型：处理器沿一条"已实现的状态路径"走完整个序列。
+- **元素如何变化**：U 与 C 固定；s 随 i 从 s₀ 一步步推进到 sₙ，形成一条状态路径。
+- **大白话理解**：就像一个人一边读一长串指令一边更新手中的"当前值"——每读一条指令，就用手头的值和这条指令算出新值，读完之后手里就是最终结果。他永远只需要记得"当前值"一个数，不需要记住全部历史。
+
+#### 公式 2（条件在后时的最坏情况内存下界）
+
+- **公式**：`⌈log₂|S|^|S|⌉ = ⌈|S|·log₂|S|⌉ = ⌈b·2^b⌉` 比特
+
+- **输入/输出**：输入为状态空间 S（有限非空），输出为"条件在后"顺序下因果处理器必须保留的最少内存比特数（最坏情况）。
+
+- **符号逐一解释**：
+  - `|S|`：状态空间大小（m）；
+  - `b = log₂|S|`：状态空间大小的对数（即表示一个状态所需比特数）；
+  - `S^S`：从 S 到自身的全体函数集合，其大小为 |S|^|S| = m^m；
+  - `⌈·⌉`：向上取整。
+  
+- **原理**：条件在后 [C, z] 时，处理器读完整个序列 C 时还不知道初始状态 z 是什么，因此必须为**每一种可能的 z** 都保留"这个序列会把我带到哪个终态"的信息，即保留一个完整的响应画像（residual map）φ_C: S → S。最坏情况下，不同的序列对应不同的映射，处理器至少要能区分 |S|^|S| 种映射。
+
+- **作用**：给出条件在后顺序的严格内存下界，与条件在前顺序的 ⌈b⌉ 比特形成**指数级差距**（b·2^b vs b）。
+
+- **元素如何变化**：|S| 固定时，内存需求按 2^|S| 级别爆炸式增长；条件在前时只随 log₂|S| 线性增长。
+
+- **大白话理解**：假如有 4 种可能的初始状态（m=4），条件后置时处理器最坏要记 256 种"如果初始状态是 A/B/C/D 分别会怎样"的组合（8 比特），而条件前置时只需记住"当前到底在哪一个状态"（2 比特）。状态越多，这个差距越恐怖——呈指数级。
+
+- 为什么说这是 "指数级" 差距
+
+  |      顺序       |       所需位数        |
+  | :-------------: | :-------------------: |
+  | 条件在前 [z, C] |    ⌈b⌉（一个状态）    |
+  | 条件在后 [C, z] | ⌈b・2ᵇ⌉（一张映射表） |
+
+  b・2ᵇ 里有个 2ᵇ 因子 ——b 每加 1，记忆量大约**翻一倍**。所以随着状态数 |S| 增大，条件在后的记忆需求是指数爆炸，而条件在前只是线性增长。这就是论文 "最坏情况下指数级差距" 结论的出处，也是它推导出 "排序原理"（order principle：条件放在信息之前更好用）的依据。
+
+  - 简单例子
+
+    **例子 A：|S| = 2（状态只有 {0, 1}，b = 1 位）**
+
+    - 映射表共有 2² = 4 种（00、01、10、11 四种函数）
+    - 条件在后需要 ⌈log₂4⌉ = **2 位**；条件在前只需 **1 位**
+
+    **例子 B：|S| = 4（状态 {A,B,C,D}，b = 2 位）**
+
+    - 映射表共有 4⁴ = **256 种**
+    - 条件在后需要 ⌈log₂256⌉ = **8 位**（= 2×4）；条件在前只需 **2 位**
+
+    **例子 C：套回破案比喻（|S| = 8 个候选凶手，b = 3 位）**
+
+    - 条件在前：只需记住 "当前最可疑的是谁"→ **3 位**。
+    - 条件在后：你读完卷宗却不知道凶手是谁，必须记住一张 8 行的大表："如果凶手是 A，整卷卷宗的解读是故事①；如果凶手是 B，是故事②；……" 这张表有 8⁸ = 1677 万种可能，区分它们要 **⌈log₂8⁸⌉ = 24 位**。
+    - 如果候选翻倍到 16 个（b = 4）：条件在后要 4×16 = 64 位，条件在前只要 4 位 —— 差距随 b 指数拉大。
+
+<div style="width:100%;box-sizing:border-box;font-family:'Segoe UI','Microsoft YaHei',sans-serif;background:#faf6ee;color:#2b2118;padding:16px;line-height:1.5;">
+<div style="font-size:15px;font-weight:700;margin-bottom:2px;">公式 (2) 的直觉：条件在后 = 记一张映射表（示意）</div>
+<div style="font-size:13px;color:#8a6f52;margin-bottom:12px;">b = log₂|S| 位表示一个状态；条件在后需要 ⌈b·2ᵇ⌉ 位，随 b 指数增长</div>
+<table style="width:100%;border-collapse:collapse;font-size:14px;background:#fff;">
+<thead><tr style="background:#f3ead9;">
+<th style="padding:9px 8px;border:1px solid #e2d5c0;text-align:left;">b（每状态位数）</th>
+<th style="padding:9px 8px;border:1px solid #e2d5c0;text-align:right;">|S| = 2ᵇ</th>
+<th style="padding:9px 8px;border:1px solid #e2d5c0;text-align:right;">映射表种数 \|S\|^|S|</th>
+<th style="padding:9px 8px;border:1px solid #e2d5c0;text-align:right;">条件在后 ⌈b·2ᵇ⌉</th>
+<th style="padding:9px 8px;border:1px solid #e2d5c0;text-align:right;">条件在前 ⌈b⌉</th>
+</tr></thead>
+<tbody>
+<tr><td style="padding:8px;border:1px solid #e2d5c0;">1</td><td style="padding:8px;border:1px solid #e2d5c0;text-align:right;">2</td><td style="padding:8px;border:1px solid #e2d5c0;text-align:right;">4</td><td style="padding:8px;border:1px solid #e2d5c0;text-align:right;">2</td><td style="padding:8px;border:1px solid #e2d5c0;text-align:right;">1</td></tr>
+<tr><td style="padding:8px;border:1px solid #e2d5c0;">2</td><td style="padding:8px;border:1px solid #e2d5c0;text-align:right;">4</td><td style="padding:8px;border:1px solid #e2d5c0;text-align:right;">256</td><td style="padding:8px;border:1px solid #e2d5c0;text-align:right;">8</td><td style="padding:8px;border:1px solid #e2d5c0;text-align:right;">2</td></tr>
+<tr><td style="padding:8px;border:1px solid #e2d5c0;">3</td><td style="padding:8px;border:1px solid #e2d5c0;text-align:right;">8</td><td style="padding:8px;border:1px solid #e2d5c0;text-align:right;">16,777,216</td><td style="padding:8px;border:1px solid #e2d5c0;text-align:right;color:#8c3d22;font-weight:700;">24</td><td style="padding:8px;border:1px solid #e2d5c0;text-align:right;">3</td></tr>
+<tr><td style="padding:8px;border:1px solid #e2d5c0;">4</td><td style="padding:8px;border:1px solid #e2d5c0;text-align:right;">16</td><td style="padding:8px;border:1px solid #e2d5c0;text-align:right;">≈1.8×10¹⁹</td><td style="padding:8px;border:1px solid #e2d5c0;text-align:right;color:#8c3d22;font-weight:700;">64</td><td style="padding:8px;border:1px solid #e2d5c0;text-align:right;">4</td></tr>
+<tr><td style="padding:8px;border:1px solid #e2d5c0;">5</td><td style="padding:8px;border:1px solid #e2d5c0;text-align:right;">32</td><td style="padding:8px;border:1px solid #e2d5c0;text-align:right;">≈1.5×10⁴⁸</td><td style="padding:8px;border:1px solid #e2d5c0;text-align:right;color:#8c3d22;font-weight:700;">160</td><td style="padding:8px;border:1px solid #e2d5c0;text-align:right;">5</td></tr>
+</tbody>
+</table>
+<div style="margin-top:10px;font-size:13px;color:#6b5b45;">看最后一对比：状态位数 b 只从 1 长到 5，条件在后要记的位数从 2 暴涨到 160；条件在前始终只有 b 位。这就是"指数级差距"。</div>
+</div>
+条件在前 = 只需记住 "当前在哪个状态"；条件在后 = 必须记住 "对每一种可能的起点，这段信息会把事情变成什么样"—— 后者是一整张函数表，函数的种类是 |S|^|S|，记住其中一种就要 log₂(|S|^|S|) = b・2ᵇ 位。这就是公式 2，也是论文后续主张 "把状态（T）放到上下文前面" 的理论动机
+
+
+
+
+
+#### 公式 3（第一遍推理采样）
+
+- **公式**：`(rⱼ, aⱼ) ~ M(· | x)，j = 1, …, ntr`
+- **输入/输出**：输入为长上下文 x 与因果推理模型 M，输出为第 j 次运行产生的推理痕迹 rⱼ 与可见答案 aⱼ。
+- **符号逐一解释**：
+  - `M`：因果推理模型（因果状态更新模型）；
+  - `x`：长上下文（任务输入）；
+  - `rⱼ`：第 j 次运行的推理痕迹（reasoning trace，模型在给出可见答案前输出的思考文本，可能不完整或有错误）；
+  - `aⱼ`：第 j 次运行的可见答案（visible answer）；
+  - `ntr`：源模型运行次数（本论文实验取 1~5，主实验取 5）；
+  - `~ M(·|x)`：从模型的条件分布中采样（说明多次运行结果可能不同）。
+- **原理**：对同一问题独立运行 ntr 次，收集多条推理痕迹作为任务状态代理的"多个视角"。
+- **作用**：为第二遍提供待测试的文本状态代理素材。
+- **大白话理解**：同一个题让模型做 5 遍，把 5 遍的"草稿纸"（推理痕迹）都收起来，等会儿一起喂回去。
+
+#### 公式 4（痕迹序列化）
+
+- **公式**：`T = π(r₁, …, rₙtr)`
+- **输入/输出**：输入为 ntr 条推理痕迹（源顺序），输出为序列化痕迹文本 T。
+- **符号逐一解释**：
+  - `π`：痕迹序列化器（serializer），在所有放置条件下固定不变；
+  - `T`：序列化后的痕迹块，用作文本任务状态代理。
+- **原理**：序列化器保留推理文本的原始顺序，仅添加固定标签与分隔符（如 `<first_run_reasoning_traces>`、`[Trace 1]`、`<trace_start>`、`<trace_end>` 等）和数据集特定的简短前言（PD）。这样保证 TRACE AS STATE 与 TRACE APPEND 使用**完全相同的 T**，顺序是唯一差异。
+- **作用**：把多轮推理痕迹拼装成一个可复用的、严格受控的文本块，确保两条件可比。
+- **大白话理解**：把 5 张草稿纸按顺序钉在一起，每张标上"第 1 次""第 2 次"……，再在最前面写一句"这是之前几次尝试的草稿，可能有错，仅供参考"，订成一个文件夹 T。
+
+#### 公式 5（第二遍推理采样，两个放置顺序）
+
+- **公式**：`(r′_Tap, a′_Tap) ~ M(· | [x, T])`；`(r′_Tas, a′_Tas) ~ M(· | [T, x])`
+- **输入/输出**：输入为两种拼接顺序的提示，输出为第二遍的推理痕迹与可见答案（上标 ' 表示第二遍）。
+- **符号逐一解释**：
+  - `[x, T]`：长上下文在前、痕迹块在后（TRACE APPEND 顺序）；
+  - `[T, x]`：痕迹块在前、长上下文在后（TRACE AS STATE 顺序）；
+  - `r′_Tap / a′_Tap`：TRACE APPEND 第二遍的痕迹与答案；
+  - `r′_Tas / a′_Tas`：TRACE AS STATE 第二遍的痕迹与答案。
+- **原理**：两条件使用相同 x、相同 T、相同模型，**唯一区别是顺序**。TRACE AS STATE 下 T 在模型重新处理 x 时就已可见，能影响上下文早期位置的表示；TRACE APPEND 下 T 在 x 之后才出现，只能影响后续推理与答案，无法改变已形成的上下文表示。
+- **作用**：这是全篇实验的核心对比，直接检验"同一份状态信息，在重读时可用 vs. 在上下文处理完才可用"哪一个更有用。
+- **大白话理解**：同样一份"参考答案草稿"，A 方式先看草稿再看原文（TRACE AS STATE），B 方式先看原文再看草稿（TRACE APPEND）。实验就是比较哪种顺序效果更好。
+
+#### 公式 6（分层增益，附录 D 诊断分析）
+
+- **公式**：`Δp(b) = Score_p(b) − Score_first(b)`
+- **输入/输出**：输入为反馈放置位置 p ∈ {pre, post} 与分层 bin b，输出为该 bin 相对第一遍基线的增益（百分点）。
+- **符号逐一解释**：
+  - `p`：反馈位置（pre = TRACE AS STATE，post = TRACE APPEND）；
+  - `b`：按 BFS 深度 d 或金标准父节点数 k 划分的 bin；
+  - `Score_p(b)`：位置 p 下该 bin 的平均得分（先对每题 5 次重复取平均，再对 bin 内题目取平均）。
+- **原理**：把增益按任务难度属性分层，观察"前置 vs 后置"的差距集中在哪些难度区间。
+- **作用**：属于探索性（hypothesis-generating）诊断，作者明确说明黄色高亮区域是事后（outcome-informed）选取的，不构成验证性推断。
+- **大白话理解**：把题目按"深不深、父节点多不多"分成几组，分别看看"先看草稿"比"后看草稿"多拿多少分。
+
+### 作者的主要观点
+
+1. **因果性 ≠ 不能跨 pass 反馈**：每个 pass 内部保持因果，但 pass 之间可以通过文本把"晚发现的状态"提前，从而既保留因果结构又缓解顺序错配。
+2. **推理痕迹是"不完美但可用"的状态代理**：痕迹可能不完整、有损甚至错误，作者明确不把痕迹等同于形式条件 z 或模型内部特权状态，只强调其功能连接——只要痕迹含有有用的状态信息，前置它就有价值。
+3. **顺序本身是一种推理期缩放杠杆**：在不训练、不改架构的前提下，仅仅改变反馈文本的放置位置就能带来显著的推理收益。
+4. **理论分离是"定性原则"而非"字面模型"**：条件状态更新任务并不是现实长上下文任务的精确模型，其作用是给出直觉与动机（§3.2 明确说明）。
+
+## 关键概念
+
+| 中文名 | 英文名 | 定义 |
+|---|---|---|
+| 因果状态更新处理器 | Causal state update processor | 按呈现顺序每个输入单元只读一次，仅用当前记忆与新单元更新持久工作记忆的处理器 |
+| 条件状态更新任务 | Conditional state update task | 初始状态由任务条件 z 提供（s₀ = z）、对序列 C 应用公式 1 并返回终态 sₙ 的问题 |
+| 残差映射 | Residual map | φ_C: S → S，对每个可能的初始状态 z 给出序列 C 作用后的终态，φ_C(z) = t(C, z) |
+| 任务状态 | Task state | 解题中需要维护的状态，如活动目标、搜索前沿、被拒绝假设集合等 |
+| 推理痕迹 | Reasoning trace | 推理模型在给出可见答案前生成的思考文本，可携带中间计算信息，可能不完整或有错 |
+| 可见答案 | Visible answer | 模型最终输出的公开答案 |
+| 序列化器 | Serializer (π) | 把 ntr 条推理痕迹按源顺序拼装为固定格式文本 T 的函数，在各条件下保持不变 |
+| 文本状态代理 | Textual state proxy | 把推理痕迹文本当作任务状态的观测代理来使用 |
+| 条件在前 / 条件在后 | Condition first [z, C] / Condition last [C, z] | 条件出现在信息序列之前或之后的两种输入顺序 |
+| TRACE AS STATE | Trace as State (Tas) | 第二遍以 [T, x] 顺序把痕迹块放在长上下文之前的方法 |
+| TRACE APPEND | Trace Append (Tap) | 对照方法，第二遍以 [x, T] 顺序把痕迹块放在长上下文之后 |
+| 推理期缩放 | Inference scaling | 通过增加推理时计算/文本反馈来提升性能，而不训练模型 |
+
+**概念关系**：
+
+```
+因果状态更新处理器（U, S, 一次读取）
+        │ 定义
+        ▼
+条件状态更新任务（z 提供 s0，对 C 应用 U）
+        │ 分析两种顺序
+        ├── 条件在前 [z, C]：单条状态路径，内存 ⌈b⌉ 比特
+        └── 条件在后 [C, z]：保留残差映射全集，最坏 ⌈b·2^b⌉ 比特
+                    │ 动机（定性原则）
+                    ▼
+        任务状态（active target / search frontier / rejected hypotheses）
+                    │ 观测手段
+                    ▼
+        推理痕迹 rⱼ（不完美、可能错误，但可观测）
+                    │ 序列化 π
+                    ▼
+        T = π(r₁,…,rₙtr) ──► 作为文本状态代理
+                    │
+        ┌───────────┴───────────┐
+        ▼                       ▼
+  TRACE AS STATE [T,x,q]    TRACE APPEND [x,T,q]
+  （状态在上下文之前）        （状态在上下文之后）
+```
+
+## 理论基础
+
+- **相关理论/相关工作**：
+  1. **长上下文架构与有效使用**：稀疏/压缩/混合注意力扩展上下文窗口（DeepSeek-V3.2/V4、Qwen3-Next）；但长上下文评测仍对证据位置、干扰项、跨输入信息组合敏感（Lost in the Middle、BABILong、RULER 等）。
+  2. **推理中的因果顺序**：因果注意力下某位置表示只能用前缀信息（Ok & Lee 2026 的 prompt-order gap、CoRe 重复全文、Racing Thoughts 的分层竞态）。
+  3. **架构级循环**：循环深度 LM（Geiping 2025）、共享权重的循环 Transformer（Saunshi 2025）、LoopFormer（可变循环轨迹）、掩码文本扩散（LLaDA）——都能"回看"，但需要大幅改动训练/推理基础设施。
+  4. **重读与文本反馈**：Re2（重复问题）、Markovian Thinker（有界文本历史）、ReContext（递归证据回放）——把任务相关文本喂回模型可提升推理。
+  5. **推理痕迹作为状态**：Hao et al. 2026（合成提示影响输出）、State over Tokens（推理前缀作为外部化计算状态）、faithfulness 证据（模型可能不忠实使用中间步骤）——痕迹能携带任务信息并影响后续输出，但模型不保证可靠使用。
+- **理论间冲突**：一类观点强调"模型不忠实使用自己的中间步骤"（Paul et al. 2024 的 faithfulness 质疑），另一类（Hao et al. 2026、State over Tokens）表明痕迹确实携带并影响状态。作者立场：**两者可以并存**——即使痕迹不完美、模型不总是"承认"它的影响，把痕迹作为文本代理前置依然能在功能上带来收益（作者用实验证实功能收益，不纠结于忠实性）。
+- **作者观点**：作者更支持"**推理痕迹具有功能性的状态承载作用**"这一方向，同时把痕迹定位为"代理"而非"真实状态"，规避了对内部状态可解释性的强假设。
+- **作者更支持的理论依据**：TRACE AS STATE 相对 TRACE APPEND 的 26/27 优势、以及"随机痕迹无增益"（Random Trace 消融）都说明：**问题特异的痕迹信息**而非通用文本脚手架，才是收益来源——这与"痕迹承载任务状态"的功能观一致。
+
+## 实验方法
+
+### 实验总览
+
+论文包含 4 组递进/互补的实验：
+
+| 编号 | 实验 | 目的 | 关系 |
+|---|---|---|---|
+| 实验1 | 主实验（§4.2） | 3 模型 × 3 基准 × 3 条件，检验 TRACE AS STATE vs TRACE APPEND vs First Pass | 核心对照 |
+| 实验2 | 上下文顺序消融（§4.3） | 9 种提示条件，排除替代解释 | 对主结论的辩护 |
+| 实验3 | Trace 数量消融（§4.4） | ntr 1→5，检验痕迹数量缩放 | 扩展参数分析 |
+| 实验4 | 难度分层诊断（Appendix D） | 按 BFS 深度/父节点数分箱看增益分布 | 探索性（假设生成） |
+
+### 实验1：主实验
+
+- **自变量**：提示条件（First Pass [x, q] / TRACE APPEND [x, T, q] / TRACE AS STATE [T, x, q]）——操作化定义：第二遍提示中 T 与 x 的相对顺序（问题 q 恒在末尾）。
+- **因变量**：各基准的评分指标——GraphWalks 用 EM（精确匹配）与 set F1；MRCRv2 用 EM 与 SequenceMatcher ratio（Seq.）；NUB-1M 用准确率（Accuracy，由 DeepSeek V4 Pro 模型评判）。所有分数为 5 次重复的平均百分比。
+- **控制变量**：模型（同模型内比较）、任务/数据集（固定 bin）、T（同一序列化器、同一批第一遍痕迹、50,000 字符截断）、问题位置（恒在末尾）、评分器（固定）、重复数（5）。
+- **操作性定义细节**：每问题 5 次重复，5 条痕迹全部进入第二遍提示；痕迹截断到前 50,000 字符；Blocked/超长/畸形/缺失/非终止/被内容过滤的案例一律计为失败（得 0 分）。
+
+### 实验2：上下文顺序消融（DeepSeek V4 Pro + GraphWalks 256K）
+
+- **自变量**：提示条件（9 种，见 Table 3）。
+- **因变量**：BFS 与 Parents 两个子任务的 EM 与 F1。
+- **控制变量**：模型、数据集、评分、5 次重复。
+- 各条件操作化定义：
+  - First pass [x, q]：单遍基线；
+  - Majority@5 / Oracle@5：对第一遍 5 个答案做多数投票/事后选最优（不喂回模型）；
+  - Question First [q, x, q]：把问题前置；
+  - Re2 [x, q, x, q]：重复问题（无推理痕迹的重读基线）；
+  - Answer Feedback [a, x, q]：把第一遍可见答案（非痕迹）前置；
+  - Random Trace [T_rand, x, q]：把其他问题的痕迹前置（问题无关）；
+  - Trace Only [T, q]：只有痕迹，没有长上下文；
+  - TRACE APPEND [x, T, q] 与 TRACE AS STATE [T, x, q]。
+
+### 实验3：Trace 数量消融
+
+- **自变量**：ntr ∈ {1,2,3,4,5}（嵌套：每个数量包含前 ntr 条合格痕迹）+ ntr=0（第一遍均值）。
+- **因变量**：GraphWalks 256K BFS F1 与 Parents F1。
+- **控制变量**：模型（DeepSeek V4 Pro Preview）、数据集、T 相同（同一 ntr 下 Tap 与 Tas 共享相同 T）、第二遍每条件 5 次新重复。
+
+### 实验4：难度分层诊断（Appendix D）
+
+- **自变量**：反馈位置（pre/post）× 难度 bin（BFS 深度 d 分箱 1–2, 3–4, 5–6, 7–8, 9–10；Parents 金标准父节点数 k 分箱 0, 1, 2, 3, 4–5, ≥6）。
+- **因变量**：相对第一遍基线的 EM/F1 增益 Δp(b)（公式 6）。
+- 样本数：BFS bins 分别为 17, 25, 21, 15, 22；Parents bins 分别为 13, 17, 25, 20, 13, 12。作者声明该分析为假设生成性质，黄色高亮为事后选择，不构成验证性推断。
+
+
+## 图片分析
+
+> 论文共有 6 幅图（Figure 1–6）。所有图片已提取到本目录 `figs/` 文件夹，以下逐图分析。
+
+### 图1：TRACE AS STATE 概览（Figure 1: Overview for TRACE AS STATE）
+
+![图1：TRACE AS STATE 概览](figs/fig1.png)
+
+- **图片名称**：Figure 1: Overview for TRACE AS STATE（TRACE AS STATE 概览图），由 A、B、C、D 四个面板组成。
+- **图内英文翻译**：
+  - A 面板 "Causal state updates"（因果状态更新）：`s0`（初始状态）→ `U`（更新规则）→ `s1` → `U` → `sn`（终态），输入 `c1…cn`（第 1 到第 n 个信息单元），公式 `si = U(si−1, ci)`（状态更新迭代规则）；
+  - B 面板 "Order-dependent memory"（顺序相关内存）：
+    - "Condition first: z, C"（条件在前：z 然后 C）——z 先到，C=(c1,…,cn) 随后，只产生 "one state path"（一条状态路径），输出 `sn`；
+    - "Condition last: C, z"（条件在后：C 然后 z）——先读完整序列 C，z 最后才到，需要保留 "many residual maps"（大量残差映射），输出 `sn`；
+    - "Worst case: exponential gap"（最坏情况：指数级差距）——总结两种顺序的内存差异；
+  - C 面板 "Trace as State"（痕迹即状态）：`trace T`（推理痕迹 T）→ "task state proxy"（任务状态代理）——T 作为任务状态的文本代理；
+  - D 面板 "Feedback across causal passes"（跨因果 pass 的反馈）：
+    - "same x, same T, same model M"（相同上下文 x、相同痕迹 T、相同模型 M）；
+    - "Causal pass 1"（第一遍因果 pass）：输入 x → M → 输出 `r1:ntr`（ntr 条推理痕迹）与 `a1:ntr`（ntr 个答案），经 `π`（序列化器）→ `T`（序列化痕迹），标注 "reasoning only"（仅推理，第一遍不输出最终答案流程）；
+    - "CAUSAL PASS 2"（第二遍因果 pass）两条分支：
+      - "Trace Append"（TRACE APPEND）：`[x, T]`——x 在前、T 在后 → M → 输出 `r_Tap`（第二遍痕迹）与 `a_Tap`（第二遍答案）；
+      - "Trace as State"（TRACE AS STATE）：`[T, x]`——T 在前、x 在后 → M → 输出 `r_Tas` 与 `a_Tas`；
+      - 两分支共用 "same T"（相同的 T）。
+- **数据表明了什么**：A 展示因果处理器只携带一个运行中状态；B 对比两种输入顺序的内存差异（条件在前只需跟踪已实现状态，条件在后最坏需要指数级更多内存）；C 说明推理痕迹 T 是任务状态的文本代理；D 展示 TRACE AS STATE 把 T 放在新一遍因果 pass 的上下文之前。
+- **图片表明什么意思**：全图是论文方法的"一页式"总览：从因果处理的顺序缺陷（A/B）出发，到把推理痕迹当作状态代理（C），再到具体的两遍放置方案（D）。
+- **结合论文的结论**：T 放在 x 之前（Tas）能让 T 在 x 被重新处理时即可用，这与条件在先原则一致；T 放在 x 之后（Tap）无法影响已形成的 x 表示。
+- **例子分析**：以 D 面板为例，两条分支唯一区别是方框顺序：上分支 [x, T] 先放原文再放草稿，下分支 [T, x] 先放草稿再放原文；输出标签 a_Tap 与 a_Tas 表明这是"再生成一次答案"，两份答案将用于后续评分对比。
+- **实验信息**：概览示意图，非实验数据图。
+
+### 图2：Trace 数量消融（Figure 2: Trace-count ablation on DeepSeek V4 Pro GraphWalks 256K）
+
+![图2：Trace 数量消融](figs/fig2.png)
+
+- **图片名称**：Figure 2: Trace-count ablation（痕迹数量消融），A 面板为 BFS F1，B 面板为 Parents F1。
+- **图内英文翻译**：
+  - 横轴 "First-pass traces (ntr)"（第一遍痕迹数量 ntr，取值 0–5）；纵轴 "F1 (%)"（F1 分数百分比）；
+  - 图例：`● No trace`（无痕迹，即第一遍基线）、`─□─ Trace Append`（痕迹后置）、`─○─ Trace as State`（痕迹前置）；
+  - 子图标题 "A. BFS F1"（广度优先搜索的 F1）、"B. Parents F1"（父节点任务的 F1）；阴影为 95% 分位置信区间。
+- **数据表明了什么**：
+  - BFS F1：ntr=0 时三点合一（36.4）；ntr=1 时 Trace Append 约 39.4、Trace as State 约 52.3；随 ntr 增加两者都上升，ntr=5 时 Trace Append 48.3、Trace as State 65.9；
+  - Parents F1：ntr=0 为 46.5；ntr=1 时 Append 47.0、Tas 76.7；ntr=5 时 Append 65.3、Tas 91.3。
+- **图片表明什么意思**：性能随加入的痕迹数量增加而上升；在每一个 ntr ≥ 1 处，Trace as State 都高于 Trace Append，差距随 ntr 增大而扩大。
+- **结合论文的结论**：痕迹数量可作为推理期缩放参数（inference-scaling parameter）；TRACE AS STATE 相对 TRACE APPEND 的优势从 ntr=1 持续到 ntr=5，不是特定痕迹数量下的偶然现象。
+- **例子分析**：Parents F1 面板中，ntr=1 时 Tas 已达 76.7，比同数量 Append 的 47.0 高近 30 个百分点，说明"仅一条自身推理痕迹 + 前置放置"就能带来巨大收益。
+- **实验信息**：实验3（Trace 数量消融），模型 DeepSeek V4 Pro Preview，数据集 GraphWalks 256K，BFS 与 Parents 两个子任务；每个 ntr 下 Tas/Tap 共享相同 T，第二遍各 5 次新重复。
+
+### 图3：GraphWalks 精确匹配增益分层（Figure 3: GraphWalks exact-match gains over the first pass by BFS depth d and gold-parent count k）
+
+![图3：GraphWalks 精确匹配增益分层](figs/fig3.png)
+
+- **图片名称**：Figure 3: GraphWalks exact-match gains over the first pass（GraphWalks 相对第一遍的精确匹配增益），左列按 BFS 深度 d 分层（面板 A/C/E），右列按金标准父节点数 k 分层（面板 B/D/F）。
+- **图内英文翻译**：
+  - 纵轴 "Exact-match gain over first pass (points)"（相对第一遍的精确匹配增益，百分点）；左列横轴 "BFS depth d"（BFS 深度，分箱 1–2, 3–4, 5–6, 7–8, 9–10）；右列横轴 "Gold-parent count k"（金标准父节点数，分箱 0, 1, 2, 3, 4–5, ≥6）；
+  - 图例：蓝色曲线 `Δpre`（TRACE AS STATE 相对第一遍的增益）、橙色曲线 `Δpost`（TRACE APPEND 相对第一遍的增益）；
+  - 底部 "BFS n: 17, 25, 21, 15, 22" 与 "Parents n: 13, 17, 25, 20, 13, 12"（各分箱题目数）；黄色阴影为描述性的、依据结果事后选取的范围；
+  - 面板标注 A DeepSeek V4 Pro、C Qwen 3.7 Max、E GLM-5.2（左列）；B DeepSeek V4 Pro、D Qwen 3.7 Max、F GLM-5.2（右列）。
+- **数据表明了什么**（EM 增益，Δpre 在前 / Δpost 在后）：
+  - DeepSeek V4 Pro：BFS 增益 [16.5, 48.8, 30.5, 12.0, 18.2] / [11.8, 11.2, 6.7, 8.0, 12.7]；Parents 增益 [21.5, 32.9, 64.0, 61.0, 58.5, 70.0] / [15.4, 12.9, 8.8, 14.0, 21.5, 15.0]；
+  - Qwen 3.7 Max：BFS 增益 [1.2, 8.0, 4.8, 2.7, 0.9] / [−1.2, 0.8, 0.0, 1.3, 0.9]；Parents 增益 [1.5, 11.8, 32.0, 47.0, 56.9, 71.7] / [1.5, 1.2, 7.2, 17.0, 20.0, 16.7]；
+  - GLM-5.2：BFS 增益 [7.1, 9.6, 6.7, 12.0, 3.6] / [1.2, 4.8, 0.0, 6.7, 8.2]；Parents 增益 [13.8, 10.6, 28.0, 36.0, 50.8, 76.7] / [−13.8, 0.0, 22.4, 31.0, 12.3, 43.3]。
+- **图片表明什么意思**：前置（Δpre）在绝大多数分箱中高于后置（Δpost）；BFS 上差距集中在中间深度（DeepSeek d=3–6），Parents 上差距随 k 增大而扩大（Qwen 单调增大）。
+- **结合论文的结论**：TRACE AS STATE 在绘制的 EM 分箱中从不低于 TRACE APPEND（仅 Qwen 在 k=0 打平）；增益分布存在模型与难度依赖的异质性，但作者强调这是描述性诊断而非验证性交互检验。
+- **例子分析**：DeepSeek V4 Pro Parents 面板：k=2 时 Δpre 达 +64.0 而 Δpost 仅 +8.8，差距超过 55 个百分点——说明在中等父节点数的问题上，"状态前置"几乎决定了成败。
+- **实验信息**：附录 D 探索性诊断，模型为三个被测模型，数据集 GraphWalks 256K，指标为 EM（图4 为 set F1），增益按公式 6 计算。
+
+### 图4：GraphWalks Set F1 增益分层（Figure 4: Set F1 gains for the same BFS and Parents stratifications）
+
+![图4：GraphWalks Set F1 增益分层](figs/fig4.png)
+
+- **图片名称**：Figure 4: Set F1 gains（Set F1 增益），上方三面板（A/B/C）为 BFS 分层，下方三面板（A/B/C）为 Parents 分层；Set F1 记录预测节点集合与金标准节点集合的部分重叠。
+- **图内英文翻译**：纵轴 "Set F1 gain over first pass (points)"（相对第一遍的 Set F1 增益）；上方横轴 "Requested BFS depth d"（请求的 BFS 深度，分箱同上），下方横轴 "Number of gold parents k"（金标准父节点数）；底部标注各分箱题目数；图例 Δpre（蓝）/Δpost（橙）；黄色阴影为描述性、结果事后选取范围。
+- **数据表明了什么**（Set F1 增益，Δpre / Δpost）：
+  - BFS：DeepSeek [9.2, 45.1, 43.9, 23.0, 18.2] / [6.8, 14.6, 11.5, 12.5, 12.7]；Qwen [0.2, 1.0, 14.3, 0.7, 0.9] / [−0.2, 0.7, 8.7, 0.9, 0.9]；GLM [1.6, 0.9, 7.7, 7.4, 4.9] / [0.4, 0.9, 6.5, 4.3, 12.8]；
+  - Parents：DeepSeek [21.5, 32.9, 55.5, 54.0, 42.4, 51.9] / [15.4, 12.9, 25.3, 23.5, 13.6, 15.0]；Qwen [1.5, 11.0, 10.8, 16.8, 11.7, 19.2] / [1.5, 3.5, 2.4, 7.8, 5.6, 7.0]；GLM [13.8, 9.4, 10.1, 9.8, 10.0, 19.5] / [−13.8, 0.8, 8.1, 8.8, 5.0, 11.9]。
+- **图片表明什么意思**：F1 画像与 EM 画像总体一致：DeepSeek 在 BFS 上保持强分离模式，Qwen 与 GLM 的分离较小或更局部化；Parents 普遍更偏向 TRACE AS STATE，但差距大小变化大。
+- **结合论文的结论**：这些画像记录了异质性，但不能证明深度或父节点数是痕迹复用的中介；确认性后续研究需要预先定义分箱并在留出题上评估。
+- **例子分析**：DeepSeek BFS 面板 d=3–4 处 Δpre = +45.1 vs Δpost = +14.6，说明该模型在中深度 BFS 问题上对"前置状态"高度敏感。
+- **实验信息**：附录 D，同图3 的诊断设置，指标为 set F1。
+
+### 图5：严格 same-T 对比的不确定性（Figure 5: Uncertainty for the strict same-T comparisons）
+
+![图5：严格 same-T 对比的不确定性](figs/fig5.png)
+
+- **图片名称**：Figure 5: Uncertainty for the strict same-T comparisons（严格 same-T 对比的不确定性）。上两行为 GraphWalks 256K 的 Exact match 与 Set F1（各拆 BFS/Parents），中间两行为 MRCRv2 8-needle 的 Exact match 与 SequenceMatcher ratio（各拆 256K/512K），最下一行为 NUB-1M 的 Accuracy。
+- **图内英文翻译**：横轴为三个模型名（DeepSeek V4 Pro、Qwen 3.7 Max、GLM-5.2）；纵轴 "Score (%)"（得分百分比）；图例 `First Pass`（第一遍，圆点）、`Trace Append`（痕迹后置，三角）、`Trace as State`（痕迹前置，方块）；面板标题如 "GraphWalks 256K - Exact match"（GraphWalks 256K 精确匹配）、"MRCRv2 8-needle - SequenceMatcher ratio"（MRCRv2 8 针 SequenceMatcher 比率）、"NUB-1M - Accuracy"（NUB-1M 准确率）。点为均值，误差棒为每题内平均 5 次重复后的问题簇 95% 分位区间。
+- **数据表明了什么**：与 Table 2 一致的均值，加上了每个单元格的不确定性区间；GraphWalks Parents 与 MRCR 各格的 Tas 均值明显更高，NUB-1M 区间更宽（只有 20 题）。
+- **图片表明什么意思**：展示 TRACE AS STATE 优势的统计稳健性——大多数单元格区间分离明显。
+- **结合论文的结论**：结合 Table 5 的成对检验，24 个严格 same-T 格子中有 20 个区间的 95% 区间整体在零以上；本图可视化了这些差异。
+- **例子分析**：GraphWalks 256K Parents-Exact match 面板中，GLM-5.2 的 Trace as State 点达 100%，区间紧贴顶部，而 First Pass 与 Trace Append 明显更低。
+- **实验信息**：附录 E，问题簇自助法（bootstrap），每题内先对 5 次重复取平均，再在问题间重采样（n=100 每格，20,000 次重采样，seed 0）。
+
+### 图6：控制消融的不确定性（Figure 6: Uncertainty for DeepSeek V4 Pro GraphWalks 256K control comparisons）
+
+![图6：控制消融的不确定性](figs/fig6.png)
+
+- **图片名称**：Figure 6: Uncertainty for DeepSeek V4 Pro GraphWalks 256K control comparisons in exact match and set F1（DeepSeek V4 Pro GraphWalks 256K 控制对比在精确匹配与 Set F1 上的不确定性）。
+- **图内英文翻译**：上块标题 "GraphWalks 256K control ablations - Exact Match"（控制消融—精确匹配），下块 "…- Set F1"（…—Set F1）；每块分左右两个面板 "BFS" 与 "Parents"；纵轴列出各条件（First Pass、Majority@5、Oracle@5、Question First、Re2、Answer Feedback、Random Trace、Trace Only、Trace Append、Trace as State）；横轴 "Score (%)"；标注 "Mean with 95% problem-cluster bootstrap CI"（带 95% 问题簇自助法置信区间的均值）。
+- **数据表明了什么**：与 Table 3 均值一致的消融条件排序；Trace as State 在四个面板中均为最高，且与多数控制条件区间分离。
+- **图片表明什么意思**：展示消融结论的稳健性：TRACE AS STATE 的优势不是噪声。
+- **结合论文的结论**：视觉上确认 Table 3 的结论——Random Trace 低于第一遍、Trace Only 接近 Trace Append、Trace as State 超过 Oracle@5，支持"问题特异性状态信息 + 前置放置"的解释。
+- **例子分析**：Parents-Set F1 面板中 Trace as State 均值约 91，误差棒下沿仍明显高于 Trace Append（约 65）的上沿，说明差距远大于抽样噪声。
+- **实验信息**：附录 E，同一问题簇自助法（20,000 次重采样，seed 0）；Majority@5 保留在至少 3 个重复预测集合中出现的答案元素，Oracle@5 报告 5 个输出的事后最高评估分数，其余条件每题 5 次计划重复、缺失/无效输出记 0。
+
+
+## 表格分析
+
+> 论文共 6 张表（Table 1、1-1、1-2、2、3、4、5、6，其中 Table 1/1-1/1-2/2/3/4/5/6 共 8 个编号）。以下逐表复刻并分析。
+
+### 表1：关键符号（Table 1: Vital Notations）
+
+| 符号 | 含义 |
+|---|---|
+| ci, C | 第 i 个信息单元；有序序列 C = (c1, …, cn) |
+| si, S, b | cᵢ 之后的任务状态；有限状态空间；状态空间大小的对数（b = log₂|S|） |
+| U | 因果状态更新规则 |
+| z | 用作初始任务状态 s₀ 的条件 |
+| x, M | 长上下文；因果推理模型 |
+| rj, aj, ntr | 推理痕迹；可见答案；源模型运行次数 |
+| π, T | 痕迹序列化器；序列化后的痕迹 |
+
+- **表格名称**：Table 1: Vital Notations（关键符号表）。
+- **行（纵轴）含义**：每个符号（ci/C、si/S/b、U、z、x/M、rj/aj/ntr、π/T）一行。
+- **列（横轴）含义**：两列——Symbol（符号）与 Meaning（含义）。
+- **数据表明了什么**：集中定义全文（§3 与实验）使用的主要记号，其中 b = log₂|S| 服务于公式 2 的内存下界表达（⌈b·2^b⌉）。
+- **得到的结论**：为 §3 的理论推导与 TRACE AS STATE/Trace APPEND 的符号约定提供统一语言。
+- **例子分析**：如 z 表示"用作初始任务状态 s₀ 的条件"——正是条件状态更新任务中"条件"的抽象；T 表示"序列化后的痕迹"，即第二遍提示中的状态代理。
+- **实验信息**：非实验数据，为方法记号表。
+
+### 表1-1：模型配置与 token 预算（Table 1-1: Model configuration and token budgets used in the experiments）
+
+| 项目 | Qwen 3.7 Max | DeepSeek V4 Pro Preview | GLM-5.2 |
+|---|---|---|---|
+| 架构 | GDN + GA | CSA + HCA + mHC | DSA + IC |
+| 输入预算 | 983,616 | 1,048,576 | 1,048,576 |
+| 输出预算 | 65,536 | 131,072 | 65,536 |
+| 推理档位 | xhigh（通过 xhigh 提示词） | max | max |
+
+- **表格名称**：Table 1-1: Model configuration and token budgets used in the experiments（实验中使用的模型配置与 token 预算）。
+- **行（纵轴）含义**：行字段为 模型（Model）、架构（Arch.）、输入预算（Input Budget）、输出预算（Output Budget）、推理档位（Reasoning）。
+- **列（横轴）含义**：三个被测模型各一列：Qwen 3.7 Max、DeepSeek V4 Pro Preview、GLM-5.2。
+- **数据表明了什么**：三个模型来自不同厂商、架构披露不同但均支持约 100 万 token 输入：DeepSeek V4 Pro Preview 用混合注意力栈（压缩稀疏注意力 CSA + 重度压缩注意力 HCA + 流形约束超连接 mHC）；Qwen 3.7 Max 用 Gated Deltanet（GDN）与 Gated Attention（GA）；GLM-5.2 是 1M-token MoE 模型，用 DeepSeek Sparse Attention（DSA）+ IndexCache（IC，跨层复用稀疏注意力索引）。
+- **得到的结论**：实验覆盖了不同架构族的百万级上下文模型，验证方法的一般性；Qwen 输入预算 983,616 略低于 1M（对应其官方接口）。
+- **例子分析**：DeepSeek V4 Pro Preview 输出预算最高（131,072），配合 max 推理档位，这解释了其 GraphWalks 第一遍痕迹可长达数万字符（需要 50,000 字符截断）。
+- **实验信息**：模型配置表，来自各官方文档（阿里云百炼、DeepSeek、Bigmodel）。
+
+### 表1-2：数据集与评分（Table 1-2: Datasets and scoring used in the experiments）
+
+| 项目 | GraphWalks | MRCRv2 | NUB-1M |
+|---|---|---|---|
+| 子集 | 256K | 256K、512K（8-needle） | Season 2 |
+| 问题数 | 200 | 200 | 20 |
+| 重复 | 5 | 5 | 5 |
+| 评分 | EM、set F1 | EM、Seq.（SequenceMatcher ratio） | Acc.（准确率） |
+
+- **表格名称**：Table 1-2: Datasets and scoring used in the experiments（实验中使用的数据集与评分）。
+- **行（纵轴）含义**：字段为 子集（Subsets）、问题数（Problems）、重复次数（Repeats）、评分（Scoring）。
+- **列（横轴）含义**：三个数据集各一列：GraphWalks、MRCRv2、NUB-1M。
+- **数据表明了什么**：GraphWalks 与 MRCRv2 各 200 题，NUB-1M 20 题；全部 5 次重复；评分口径不同（GraphWalks 用 EM + 集合 F1；MRCRv2 用 EM + SequenceMatcher 比率；NUB-1M 用准确率）。
+- **得到的结论**：因为不同模型 tokenizer 不同、1M bin 中许多问题超长无法公平测试，故选取 1M 以下最长 bin（GraphWalks 256K、MRCRv2 的 256K/512K），并留出空间容纳 T 与第二遍文本。
+- **例子分析**：MRCRv2 的 Seq. 指标用 Python difflib.SequenceMatcher 比率，与 GraphWalks 的集合 F1 是不同口径（论文特意标注区分）。
+- **实验信息**：数据集配置表。
+
+### 表2：主实验结果（Table 2: Long-context results for first pass, TRACE AS STATE and TRACE APPEND）
+
+| 模型 | 条件 | GW BFS EM | GW BFS F1 | GW Par. EM | GW Par. F1 | MR 256K EM | MR 256K Seq. | MR 512K EM | MR 512K Seq. | NUB-1M Acc. |
+|---|---|---|---|---|---|---|---|---|---|---|
+| DeepSeek V4 Pro Preview | First Pass | 31.6 | 36.4 | 29.2 | 46.5 | 53.8 | 78.5 | 45.4 | 63.6 | 60.0 |
+| | TRACE APPEND | 41.8 | 48.3 | 43.0 | 65.3 | 66.6 | 79.6 | 49.4 | 66.9 | 71.0 |
+| | **TRACE AS STATE** | **58.8** | **65.9** | **81.8** | **91.3** | **76.8** | **88.7** | **52.6** | **73.3** | **73.0** |
+| Qwen 3.7 Max | First Pass | 60.0 | 68.1 | 60.8 | 87.2 | 79.8 | 83.1 | 36.2 | 43.7 | 37.0 |
+| | TRACE APPEND | 60.4 | 70.4 | 71.0 | 91.7 | 84.0 | 87.1 | 40.4 | 47.4 | 49.0 |
+| | **TRACE AS STATE** | **63.8** | **71.7** | **96.4** | **99.1** | **88.4** | **91.3** | **46.8** | **52.5** | **51.0** |
+| GLM-5.2 | First Pass | 55.8 | 70.7 | 66.4 | 88.5 | 40.2 | 48.2 | 42.6 | 52.0 | 43.0 |
+| | TRACE APPEND | 60.0 | 75.8 | 83.2 | 92.7 | 40.0 | 58.3 | 44.6 | 59.9 | 65.0 |
+| | **TRACE AS STATE** | **63.4** | 75.0 | **100.0** | **100.0** | **61.2** | **71.9** | **55.4** | **70.1** | **66.0** |
+
+> 注：GW = GraphWalks 256K；MR = MRCRv2 8-needle。加粗为该模型×指标列内最优。所有分数为 5 次重复平均百分比，越高越好。
+
+- **表格名称**：Table 2: Long-context results for first pass, TRACE AS STATE and TRACE APPEND（第一遍、TRACE AS STATE 与 TRACE APPEND 的长上下文结果）。
+- **行（纵轴）含义**：3 个模型 × 每模型 3 种条件（First Pass / TRACE APPEND / TRACE AS STATE）。
+- **列（横轴）含义**：9 个指标列——GraphWalks 256K 的 BFS（EM、F1）与 Parents（EM、F1）；MRCRv2 8-needle 的 256K（EM、Seq.）与 512K（EM、Seq.）；NUB-1M Season 2 的 Acc.。
+- **数据表明了什么**：
+  - 27 个模型×任务×指标组合中，TRACE AS STATE 有 26 个高于 TRACE APPEND；唯一例外是 GLM-5.2 GraphWalks BFS F1（75.0 vs 75.8，APPEND 高 0.8，但该格 EM 上 Tas 更高 63.4 vs 60.0）；
+  - TRACE AS STATE 在全部 27 个组合上都高于 First Pass；
+  - 最强增益在 GraphWalks Parents：DeepSeek EM 29.2→81.8（+52.6）、F1 46.5→91.3；Qwen EM 60.8→96.4、F1 87.2→99.1；GLM 达 100.0/100.0；
+  - TRACE APPEND 在多数设置也高于 First Pass（痕迹文本本身携带有用信息），但额外优势远小于前置。
+- **得到的结论**：把推理痕迹作为任务状态文本代理、并放在上下文之前（TRACE AS STATE），其收益跨模型、跨任务、跨指标具有一般性；这与条件状态更新任务的内存分析一致（状态在信息序列之前可用时更省"内存"、更易利用）。
+- **例子分析**：以摘要引用为例：DeepSeek V4 Pro 在 GraphWalks Parents 上 EM 从第一遍 29.2%、TRACE APPEND 43.0% 提升到 TRACE AS STATE 81.8%；GLM-5.2 从 66.4%（First Pass）与 83.2%（APPEND）提升到 100.0%。
+- **实验信息**：主实验（实验1），3 模型 × 3 基准；每问题 5 次重复，5 条痕迹全部进入第二遍；GraphWalks 评分 EM + set F1，MRCRv2 评分 EM + SequenceMatcher ratio，NUB-1M 用 DeepSeek V4 Pro 模型评判准确率；Blocked/超长/畸形/缺失/非终止/内容过滤均计 0 分。
+
+### 表3：上下文顺序消融（Table 3: DeepSeek V4 Pro Preview performance on GraphWalks 256K under different prompt conditions）
+
+| 条件 | 提示格式 | BFS EM | BFS F1 | Parents EM | Parents F1 |
+|---|---|---|---|---|---|
+| First pass | [x, q] | 31.6 | 36.4 | 29.2 | 46.5 |
+| Majority@5 | —（第一遍 5 答多数投票） | 35.0 | 39.6 | 31.0 | 47.8 |
+| Oracle@5 | —（第一遍 5 答事后选最优） | 50.0 | 55.5 | 50.0 | 75.0 |
+| Question First | [q, x, q] | 33.4 | 36.8 | 53.0 | 64.6 |
+| Re2 (Xu et al., 2024) | [x, q, x, q] | 49.0 | 52.9 | 50.0 | 68.9 |
+| Answer Feedback | [a, x, q] | 35.4 | 39.4 | 45.4 | 58.0 |
+| Random Trace | [T_rand, x, q] | 22.4 | 35.9 | 14.2 | 31.3 |
+| Trace Only | [T, q] | 46.2 | 52.7 | 43.8 | 67.3 |
+| TRACE APPEND | [x, T, q] | 41.8 | 48.3 | 43.0 | 65.3 |
+| **TRACE AS STATE** | **[T, x, q]** | **58.8** | **65.9** | **81.8** | **91.3** |
+
+> 注：加粗为每个子任务×指标列内最优。
+
+- **表格名称**：Table 3: DeepSeek V4 Pro Preview performance on GraphWalks 256K under different prompt conditions（DeepSeek V4 Pro Preview 在不同提示条件下的 GraphWalks 256K 表现）。
+- GraphWalks 任务里：**x** = 长上下文（图 + 指令），**q** = 问题（操作），**T** = 第一遍的推理痕迹块，**a** = 第一遍的答案。表 3 的 "Prompt" 列就是这些组件的不同摆放方式
+- **行（纵轴）含义**：10 种提示条件（含 2 个无提示重喂的后处理基线 Majority@5 / Oracle@5）。
+- **列（横轴）含义**：条件名、提示格式、BFS（EM、F1）、Parents（EM、F1）。
+- **数据表明了什么**（消融结论逐条）：
+  - **Question First**：Parents 上大幅提升（EM 29.2→53.0）但 BFS 上几乎不变（31.6→33.4）——问题本身是某些任务的关键状态；
+  - **Re2**：两个子任务都大幅超过 First pass（BFS EM 49.0、Parents EM 50.0），说明重读有用；但 Parents 上仍远低于 TRACE AS STATE（50.0 vs 81.8）——T 携带了超出"单纯重复提示"的任务相关信息；
+  - **Answer Feedback**：超过 First pass 但远低于 TRACE AS STATE（Parents EM 45.4 vs 81.8）——序列化推理文本比答案/问题单独作为状态代理更有用；
+  - **Random Trace**：比无痕迹第一遍还差（Parents EM 14.2 < 29.2），远低于 TRACE AS STATE——收益不是通用格式效应，问题无关的类痕迹脚手架不足；
+  - **Trace Only**：接近 TRACE APPEND（BFS EM 46.2 vs 41.8；Parents EM 43.8 vs 43.0）——痕迹本身含答案相关信息；但远低于 TRACE AS STATE——原输入放在痕迹之后仍有用；
+  - 所有"把长上下文副本放后面"的控制都低于 TRACE AS STATE——文本近因效应不能解释收益；
+  - **TRACE AS STATE 超过 Oracle@5**（Parents EM 81.8 vs 50.0、F1 91.3 vs 75.0）——反馈遍比"事后挑选 5 次第一遍最佳输出"更好。
+- **得到的结论**：TRACE AS STATE 的优势源于"问题特异的、任务相关的推理痕迹信息 + 前置放置"，而非格式脚手架、答案可见性、文本近因或简单重读。
+- **例子分析**：Parents EM 一列最能说明问题：Random Trace 14.2 < First pass 29.2 < Answer Feedback 45.4 < Trace Only 43.8 ≈ APPEND 43.0 < Oracle@5 50.0 < TRACE AS STATE 81.8——每替换一个"更接近真实状态代理"的成分，性能就上一个台阶。
+- **实验信息**：实验2（上下文顺序消融），模型 DeepSeek V4 Pro Preview，数据集 GraphWalks 256K，5 次重复平均；Majority@5 取 5 次第一遍答案的多数选择，Oracle@5 取事后最高分输出。
+- ## 分组讲解 10 个条件
+
+  **第一组：基线 + "多跑几次有没有用"（后处理对照）**
+
+| 条件           | Prompt | 是什么                                                    | 测什么 / 结论                                                |
+| -------------- | :----- | :-------------------------------------------------------- | :----------------------------------------------------------- |
+| **First Pass** | [x, q] | 最朴素的基线：图 + 问题，直接作答一遍                     | 零痕迹基线。BFS EM 31.6，Parents EM 29.2                     |
+| **Majority@5** | —      | 跑 5 次第一遍，对 5 个答案做**多数投票**                  | 证明 "多生成几次" 只有微弱收益（Parents EM 31.0）——TRACE AS STATE 的提升不是靠多跑几次 |
+| **Oracle@5**   | —      | 跑 5 次第一遍，事后**挑出最好的那个答案**（理论最优上界） | 这是 "能拿到的最好天花板"（Parents EM 50.0）。后面你会看到 TRACE AS STATE（81.8）**超过了 Oracle@5**—— 也就是说 "带痕迹重读" 比 "5 次里挑最好" 还强，这是论文最硬的论点之一 |
+
+第二组：换输入内容（"是不是只要放点有用的东西在前面就行？"）
+
+| 条件                      | Prompt       | 是什么                                                    | 测什么 / 结论                                                |
+| ------------------------- | ------------ | --------------------------------------------------------- | ------------------------------------------------------------ |
+| **Question First**        | [q, x, q]    | 把问题 q 提到任务 x 前面（后面再给一次 q）                | 测 "问题本身是不是关键任务状态"。结果：**Parents 大涨**（29.2→53.0），BFS 几乎没变（31.6→33.4）→ 说明 q 确实是一种任务状态，而且对 Parents 这类任务格外重要 |
+| **Re2 (Xu et al., 2024)** | [x, q, x, q] | 把上下文和问题**完整重复两遍**（外部论文 Re2 的重读方法） | 测 "单纯重读一遍有没有用"。有大提升（BFS EM 31.6→49.0），但仍低于 TRACE AS STATE → 重读有用，但 T 携带的信息比 "重复提示" 更多 |
+| **Answer Feedback**       | [a, x, q]    | 把第一遍的**答案 a**（不是推理痕迹）放前面                | 测 "答案 vs 推理痕迹哪个是好状态代理"。比 first pass 好但远低于 TRACE AS STATE（Parents EM 45.4 vs 81.8）→ 序列化的推理文本比答案本身更有用 |
+
+第三组：痕迹质量控制（"是不是任何痕迹样子的文本都行？"）
+
+| 条件             | Prompt         | 是什么                               | 测什么 / 结论                                                |
+| ---------------- | -------------- | ------------------------------------ | ------------------------------------------------------------ |
+| **Random Trace** | [T_rand, x, q] | 前缀换成**别的题目**的推理痕迹       | 性能比 First Pass 还差（Parents EM 14.2）→ 证明提升不是 "通用格式效果"，必须是**同题目的、任务相关的**痕迹才有用 |
+| **Trace Only**   | [T, q]         | 只给痕迹和问题，**不给原始上下文 x** | 性能和 TRACE APPEND 相近（Parents EM 43.8）→ 痕迹本身含有答案相关信息；但仍远低于 TRACE AS STATE → 原始输入还是有用的 |
+
+第四组：论文真正要对比的两个主角
+
+| 条件               | Prompt    | Parents EM |
+| ------------------ | --------- | ---------- |
+| **TRACE APPEND**   | [x, T, q] | 43.0       |
+| **TRACE AS STATE** | [T, x, q] | **81.8**   |
+
+- ## 排除法总结：这 10 个条件合起来证明了什么
+
+  把所有条件当 "嫌疑人" 逐一排除，剩下的解释就是真相：
+
+  1. **不是 "多跑几次"**（Majority@5/Oracle@5 都追不上，且 TRACE AS STATE 反超 Oracle@5）；
+  2. **不是 "单纯重读"**（Re2 不如它）；
+  3. **不是 "放答案 / 放问题就行"**（Answer Feedback、Question First 都不如它）；
+  4. **不是 "任意痕迹格式"**（Random Trace 反而更差 → 必须同题相关）；
+  5. **不是 "内容靠后就有用"**（所有对照都把上下文放得靠后，但都低于 TRACE AS STATE → "位置靠近末尾" 不能解释收益，**位置在前的状态效应**才是关键）。
+
+  结论指向唯一解释：**同题的、序列化推理痕迹，作为任务状态的文本代理放到上下文之前**—— 这才是提升的来源
+
+### 表4：可复用痕迹块的固定序列化格式（Table 4: The fixed serialization used to construct the reusable trace block）
+
+| 元素 | 内容 |
+|---|---|
+| 推理痕迹 | r = (r1, r2, …, rₙtr) |
+| T = π(r) | PD（数据集特定的前言文本）<br>`<first_run_reasoning_traces>`<br>`[Trace 1]` r1<br>`[Trace 2]` r2<br>…<br>`[Trace ntr]` rₙtr<br>`</first_run_reasoning_traces>` |
+
+- **表格名称**：Table 4: The fixed serialization used to construct the reusable trace block（构造可复用痕迹块的固定序列化格式）。
+- **行（纵轴）含义**：两个条目——原始推理痕迹序列 r，以及序列化产物 T = π(r) 的文本结构。
+- **列（横轴）含义**：元素名与内容。
+- **数据表明了什么**：T 由"数据集特定前言 PD + 固定 XML 式痕迹块"构成：PD 是数据集特定的描述与警告（如 GraphWalks 的"这些是同一图问题独立首次尝试的推理痕迹，可能含错误，仅作草稿提示，请对照图验证"），痕迹块用 `<first_run_reasoning_traces>` 包裹，每条痕迹标 `[Trace j]` 并按源顺序排列；可见答案（a）不在 T 内；超过 50,000 字符的痕迹截断为前 50,000 字符加省略号。
+- **得到的结论**：保证 TRACE AS STATE 与 TRACE APPEND 使用字节级相同的 T，顺序成为唯一变量，使实验对比干净。
+- **例子分析**：GraphWalks 的 PD 精确文本："Below are selected reasoning traces or trace tail windows from independent first attempts on the same graph problem. They may contain mistakes. Use them only as scratchpad hints, and verify against the graph."（以下是同一图问题独立首次尝试的精选推理痕迹或痕迹尾部窗口。它们可能包含错误。仅将它们作为草稿提示使用，并对照图进行验证。）
+- **实验信息**：附录 C 的固定提示工程配置；MRCRv2 的 PD 另有"Do not copy any trace text into the visible answer"（勿将痕迹文本复制进可见答案）等指令。
+
+### 表5：严格 same-T 时序对比的成对不确定性（Table 5: Paired problem-cluster uncertainty for the strict same-T timing contrast）
+
+| 模型 | 单元格 | Δ [95% CI]（百分点） |
+|---|---|---|
+| DeepSeek V4 Pro | GW BFS EM | **+17.00 [+11.00, +23.40]** |
+| | GW BFS F1 | **+17.63 [+11.65, +23.97]** |
+| | GW Par. EM | **+38.80 [+31.60, +46.20]** |
+| | GW Par. F1 | **+26.02 [+20.52, +31.84]** |
+| | MR 256K EM | **+10.20 [+4.80, +15.80]** |
+| | MR 256K Seq. | **+9.11 [+4.77, +13.93]** |
+| | MR 512K EM | +3.20 [−2.60, +9.40] |
+| | MR 512K Seq. | **+6.35 [+1.69, +11.36]** |
+| Qwen 3.7 Max | GW BFS EM | **+3.40 [+1.00, +6.40]** |
+| | GW BFS F1 | +1.29 [−0.56, +3.90] |
+| | GW Par. EM | **+25.40 [+17.60, +33.60]** |
+| | GW Par. F1 | **+7.43 [+4.63, +10.58]** |
+| | MR 256K EM | **+4.40 [+1.40, +8.00]** |
+| | MR 256K Seq. | **+4.19 [+1.41, +7.53]** |
+| | MR 512K EM | **+6.40 [+1.80, +11.40]** |
+| | MR 512K Seq. | **+5.11 [+0.67, +9.84]** |
+| GLM-5.2 | GW BFS EM | +3.40 [−1.00, +7.80] |
+| | GW BFS F1 | −0.83 [−3.94, +1.62] |
+| | GW Par. EM | **+16.80 [+10.40, +23.80]** |
+| | GW Par. F1 | **+7.32 [+3.93, +11.30]** |
+| | MR 256K EM | **+21.20 [+14.40, +28.20]** |
+| | MR 256K Seq. | **+13.56 [+8.33, +19.34]** |
+| | MR 512K EM | **+10.80 [+3.40, +18.20]** |
+| | MR 512K Seq. | **+10.20 [+4.65, +16.08]** |
+
+> 注：Δ = Trace as State 减 Trace Append（百分点）；括号为无调整 95% 分位区间（每题 5 次重复平均后，n=100 每格，20,000 次重采样，seed 0）。区间整体高于零的加粗。GW = GraphWalks 256K；MR = MRCRv2 8-needle。
+
+- **表格名称**：Table 5: Paired problem-cluster uncertainty for the strict same-T timing contrast（严格 same-T 时序对比的成对问题簇不确定性）。
+- **行（纵轴）含义**：3 模型 × 每模型 8 个单元格（GraphWalks BFS/Parents × EM/F1；MRCR 256K/512K × EM/Seq.），共 24 行。
+- **列（横轴）含义**：模型、单元格、Δ 及其 95% 置信区间。
+- **数据表明了什么**：24 格中 20 格的 95% 区间整体高于零；4 格跨越零：DeepSeek MR 512K EM、Qwen GW BFS F1、GLM GW BFS EM 与 F1。GLM GW BFS F1 的 Δ 为负（−0.83）。
+- **得到的结论**：TRACE AS STATE 相对 TRACE APPEND 的优势在绝大多数单元格统计上显著；例外集中在 BFS F1 等边际增益较小的格子，与 Table 2 的 26/27 结论一致。
+- **例子分析**：DeepSeek GW Par. EM 的 Δ = +38.80 [31.60, 46.20]——最显著的格子，区间下界高达 31.6，说明前置带来的 38.8 个百分点优势远不是噪声。
+- **实验信息**：附录 E，成对问题簇自助法，每题内先平均 5 次重复再重采样。
+
+### 表6：主结果推理的 token 用量（Table 6: Provider-reported token usage for main-result inference, in millions）
+
+| 模型 | 基准 | 条件 | 本次调用 Cached | 本次调用 Missed | 本次调用 Output | 总计 Cached | 总计 Missed | 总计 Output |
+|---|---|---|---|---|---|---|---|---|
+| DeepSeek V4 Pro | GraphWalks 256K | First Pass | 206.766 | 51.092 | 62.507 | — | — | — |
+| | | TRACE APPEND | 271.017 | 68.554 | 35.231 | 477.783 | 119.646 | 97.738 |
+| | | TRACE AS STATE | 277.074 | 62.501 | 27.975 | 483.840 | 113.593 | 90.482 |
+| | MRCRv2 256K | First Pass | 50.817 | 46.961 | 1.149 | — | — | — |
+| | | TRACE APPEND | 79.982 | 20.820 | 0.690 | 130.799 | 67.782 | 1.839 |
+| | | TRACE AS STATE | 51.875 | 50.051 | 1.355 | 102.692 | 97.012 | 2.504 |
+| | MRCRv2 512K | First Pass | 155.283 | 38.195 | 0.989 | — | — | — |
+| | | TRACE APPEND | 178.675 | 18.526 | 0.702 | 333.958 | 56.721 | 1.691 |
+| | | TRACE AS STATE | 157.261 | 39.940 | 1.241 | 312.544 | 78.135 | 2.230 |
+| | NUB-1M | First Pass | 31.651 | 8.418 | 0.817 | — | — | — |
+| | | TRACE APPEND | 39.589 | 4.460 | 0.184 | 71.240 | 12.878 | 1.001 |
+| | | TRACE AS STATE | 27.418 | 16.637 | 0.398 | 59.069 | 25.055 | 1.215 |
+| Qwen 3.7 Max | GraphWalks 256K | First Pass | 260.213 | 97.483 | 5.402 | — | — | — |
+| | | TRACE APPEND | 264.906 | 117.866 | 2.865 | 525.119 | 215.350 | 8.267 |
+| | | TRACE AS STATE | 271.742 | 111.030 | 3.615 | 531.955 | 208.514 | 9.017 |
+| | MRCRv2 256K | First Pass | 38.337 | 63.495 | 2.111 | — | — | — |
+| | | TRACE APPEND | 60.227 | 51.195 | 0.989 | 98.564 | 114.690 | 3.100 |
+| | | TRACE AS STATE | 62.213 | 49.209 | 1.397 | 100.550 | 112.704 | 3.508 |
+| | MRCRv2 512K† | First Pass | 134.607 | 63.738 | 2.263 | — | — | — |
+| | | TRACE APPEND | 154.827 | 53.489 | 1.211 | 289.434 | 117.226 | 3.474 |
+| | | TRACE AS STATE | 153.971 | 54.345 | 1.724 | 288.577 | 118.083 | 3.988 |
+| | NUB-1M | First Pass | 34.253 | 7.547 | 0.489 | — | — | — |
+| | | TRACE APPEND | 38.184 | 5.773 | 0.253 | 72.437 | 13.320 | 0.742 |
+| | | TRACE AS STATE | 32.414 | 11.549 | 0.419 | 66.667 | 19.096 | 0.908 |
+| GLM-5.2 | GraphWalks 256K | First Pass | 134.748 | 150.760 | 19.463 | — | — | — |
+| | | TRACE APPEND | 55.612 | 265.396 | 9.127 | 190.361 | 416.156 | 28.591 |
+| | | TRACE AS STATE | 64.390 | 256.618 | 16.491 | 199.138 | 407.377 | 35.954 |
+| | MRCRv2 256K | First Pass | 73.782 | 24.718 | 1.891 | — | — | — |
+| | | TRACE APPEND | 82.413 | 20.940 | 2.518 | 156.195 | 45.658 | 4.409 |
+| | | TRACE AS STATE | 82.464 | 20.888 | 1.516 | 156.246 | 45.606 | 3.407 |
+| | MRCRv2 512K | First Pass | 151.247 | 42.262 | 1.441 | — | — | — |
+| | | TRACE APPEND | 157.740 | 40.508 | 2.002 | 308.987 | 82.770 | 3.443 |
+| | | TRACE AS STATE | 157.458 | 40.790 | 1.648 | 308.705 | 83.052 | 3.089 |
+| | NUB-1M | First Pass | 1.272 | 41.123 | 0.995 | — | — | — |
+| | | TRACE APPEND | 3.840 | 43.087 | 0.484 | 5.111 | 84.209 | 1.478 |
+| | | TRACE AS STATE | 0.457 | 46.475 | 0.856 | 1.728 | 87.598 | 1.850 |
+
+> 注：单位为百万 token；Missed input = 总输入 − 缓存输入；推理 token 计入 Output。TRACE APPEND / TRACE AS STATE 的"总计"列 = 该遍 + First Pass 分量求和。†Qwen MRCRv2 512K 行在原文带 † 标记（论文未单独解释该标记，可能表示条件性/参考性）。
+
+- **表格名称**：Table 6: Provider-reported token usage for main-result inference（主结果推理的 Provider 报告 token 用量）。
+- **行（纵轴）含义**：3 模型 × 3 基准 × 3 条件（First Pass / TRACE APPEND / TRACE AS STATE）。
+- **列（横轴）含义**：本次调用（Tokens）的 Cached input / Missed input / Output，以及 TRACE APPEND/TRACE AS STATE 的"总计"（Total tokens）三列（= 本次 + First Pass 分量）。
+- **数据表明了什么**：
+  - 第二次遍（无论 Tas 还是 Tap）都额外消耗数千万到数亿 token：如 DeepSeek GraphWalks 256K 总计约 4.84 亿（Tas）vs 第一遍约 2.07 亿缓存 + 0.51 亿未缓存 + 0.63 亿输出；
+  - GLM-5.2 GraphWalks 的 Missed input 极高（Tas 达 256.618M），反映其稀疏注意力索引缓存（IC）复用特点；
+  - 输出 token 中推理 token 占主体（GLM GraphWalks 第一遍输出 19.463M，远超 MRCR/NUB 的输出量级），对应 max 推理档位产生长痕迹。
+- **得到的结论**：TRACE AS STATE 的收益以额外一遍推理（latency 与 token 成本翻倍量级）为代价；这是方法的主要成本，论文在 Limitations 中也明确承认。
+- **例子分析**：GLM-5.2 NUB-1M First Pass 输出仅 0.995M、缓存输入仅 1.272M，而 TRACE AS STATE 输出 0.856M、缓存 0.457M、未缓存 46.475M——NUB-1M 的长篇小说上下文几乎全未被缓存命中，说明其 API 缓存策略与 GraphWalks 不同。
+- **实验信息**：附录 F，Provider API 报告的用量（阿里云百炼、DeepSeek、Bigmodel）；不含客户端最大输出限制，有效 provider 默认值可能随时间变化。
+
+
+## 实验与数据集分析
+
+### 实验步骤
+
+1. **准备阶段**：选定 3 个模型（DeepSeek V4 Pro Preview、GLM-5.2、Qwen 3.7 Max）与 3 个基准（GraphWalks 256K、MRCRv2 8-needle 的 256K/512K、NUB-1M Season 2）；每个模型使用官方提供商 API 与最高可用推理档位（DeepSeek/GLM 用 max，Qwen 用官方 xhigh 提示词）；固定序列化器构造 T（PD + `<first_run_reasoning_traces>` 块），超长痕迹截断到前 50,000 字符。
+2. **第一遍（源遍）**：对每个问题，以 [x, q] 格式运行 5 次，得到 5 组 (rⱼ, aⱼ)，保存推理痕迹与答案。
+3. **序列化**：把 5 条痕迹按源顺序序列化为 T（每条标 [Trace j]）。
+4. **第二遍（反馈遍）**：对每个问题运行两种条件——TRACE AS STATE [T, x, q] 与 TRACE APPEND [x, T, q]，各 5 次新重复。
+5. **评分**：按各基准口径评分；阻塞/超长/畸形/缺失/非终止/内容过滤一律记 0 分；5 次重复取平均。
+6. **消融与附加分析**：GraphWalks 256K 上做 9 条件上下文顺序消融（仅 DeepSeek V4 Pro）；ntr 1→5 痕迹数量消融；难度分层诊断（附录 D）；成对置信区间（附录 E）；token 用量记录（附录 F）。
+
+### 实验对照组
+
+- **核心对照**：TRACE AS STATE [T, x, q] vs TRACE APPEND [x, T, q]——完全相同的 x、T、模型、评分，唯一差异是 T 与 x 的相对顺序（same-T 严格对照）。
+- **性能基线**：First Pass [x, q]（单遍）；Majority@5 / Oracle@5（第一遍 5 次输出的后处理）。
+- **解释排除对照**：Question First [q, x, q]（问题前置）、Re2 [x, q, x, q]（纯重读，无痕迹）、Answer Feedback [a, x, q]（答案而非痕迹前置）、Random Trace [T_rand, x, q]（问题无关痕迹）、Trace Only [T, q]（去掉长上下文）。
+- **控制变量**：模型版本（DeepSeek 用 2026-4-24 版）、推理档位、序列化器、问题位置（恒在末尾）、5 次重复、评分器、数据集 bin。
+
+### 实验结果表格解读
+
+- **Table 2**（主结果）：见"表格分析-表2"，核心结论为 26/27 胜出 + 全指标高于第一遍。
+- **Table 3**（消融）：见"表格分析-表3"，核心结论为前置收益来自问题特异状态信息，而非格式/近因/答案可见性。
+- **Table 5**（成对不确定性）：24 格中 20 格区间整体在零以上；4 格跨零（DeepSeek MR 512K EM、Qwen GW BFS F1、GLM GW BFS EM/F1）。
+- **Table 6**（token 成本）：第二遍成本与第一遍相当或更高（总量约为 1.3~5.3 倍于第一遍的输入量级），是方法的主要代价。
+
+### 数据集拆解
+
+---
+
+#### 数据集1：GraphWalks 256K（图行走基准）
+
+##### 1. 基础来源信息
+- **提出作者/团队**：OpenAI；发布论文/资料：GraphWalks: A multi hop reasoning long context benchmark（数据集卡，2025a）；官方出处：HuggingFace `openai/graphwalks`。
+- **原始构建目的**：评测大模型在长上下文中进行**多跳图推理**的能力（需要维护图状态）。
+- **本论文使用场景**：主实验的长上下文任务之一（256K bin，BFS 与 Parents 两个子任务），以及全部消融实验（上下文顺序消融、trace 数量消融、难度分层诊断）都在这 200 题上进行。
+
+##### 2. 数据集整体规模
+- 论文使用子集：GraphWalks 256K bin，**200 个问题**，每个问题 **5 次重复**。
+- 任务类型：图算法推理——BFS（广度优先遍历，按请求深度 d 返回节点集）与 Parents（返回金标准父节点集，大小 k）。
+- 划分：论文未披露 256K 子集内训练/验证/测试划分（该基准主要用于推理评测，论文未披露该信息）。
+- 配套标注：金标准节点集合（用于 EM 与 set F1 打分）。
+
+##### 3. 数据集内部内容与构成
+- 核心数据类型：长文本提示——图的边列表（edge list，长上下文）+ 操作指令（如"从节点 A 出发做 BFS 深度 d"），要求输出节点集合。
+- 每条样本标准构成字段（推断自论文描述）：图（边列表，长上下文 x）、操作/问题（如 BFS 深度 d 或父节点查询）、金标准答案（节点集合）。论文原文未逐字段披露数据集 schema。
+- 细分任务清单：BFS（按深度遍历）、Parents（父节点集）；难度分层维度为 d（1–10，合并为 1–2,3–4,5–6,7–8,9–10 五个 bin）与 k（0,1,2,3,4–5,≥6 六个 bin）。
+
+##### 4. 真实样本示例
+- 论文原文未给出完整原始样本（数据集来自 OpenAI 公开基准）。论文仅说明提示格式为：图与操作在用户消息中，系统提示要求"仅使用用户消息中的图和操作，输出恰好一行 `Final Answer: [node1, node2]`，空集用 []"。
+- 示例语义：一个 BFS 问题 = 一段很长的有向图边列表 + "从节点 X 出发，深度 d 的 BFS 访问节点集合是？"，答案格式 `Final Answer: [a, b, c]`；一个 Parents 问题 = 同样长边列表 + "节点 Y 的所有父节点是？"，答案 `Final Answer: [p1, p2]`。
+
+##### 5. 评测标准 & 配套工具
+- 原生配套评测：EM（预测节点集与金标准集合完全一致为 1）与 set F1（集合部分重叠分数）。
+- 官方评测方案：评分器解析 `Final Answer: [...]` 终行，与金标准集合比较；空预测合法（两个空集 EM=F1=1；一空一非空 = 0）；缺失/畸形/非终止答案记 0。
+- 开源地址：HuggingFace `openai/graphwalks`；使用限制以数据集卡为准（论文未披露额外限制）。
+
+##### 6. 本论文使用该数据集的特殊设定
+- 输入限制：选用 256K bin（1M bin 因不同模型 tokenizer 差异导致大量超长，无法公平测试）；问题 q 从长上下文分离并恒放提示末尾；痕迹截断 50,000 字符；第二遍提示 [T, x, q] 或 [x, T, q]。
+- 对照组基线范围：First Pass、Majority@5、Oracle@5、Question First、Re2、Answer Feedback、Random Trace、Trace Only、TRACE APPEND、TRACE AS STATE（Table 3）。
+- 本论文核心指标：DeepSeek V4 Pro 在 Parents 上 EM 29.2→81.8（Tas）、F1 46.5→91.3；Qwen EM 60.8→96.4、F1 87.2→99.1；GLM-5.2 达 EM/F1 100.0/100.0。
+
+---
+
+#### 数据集2：MRCRv2 8-needle（多请求对话检索基准）
+
+##### 1. 基础来源信息
+- **提出作者/团队**：OpenAI（MRCR 数据集，2025b），源自 Vodrahalli et al. 2024（Michelangelo: Long context evaluations beyond haystacks via latent structure queries）的长期上下文评测思路；官方出处：HuggingFace `openai/mrcr`。
+- **原始构建目的**：评测模型在长对话历史中检索并把**最终请求绑定到正确的早期请求-响应实例**的能力（"多针草垛"式结构检索）。
+- **本论文使用场景**：主实验长上下文任务之一（8-needle 变体，256K 与 512K 两个长度 bin，各 200 题）。
+
+##### 2. 数据集整体规模
+- 论文使用子集：MRCRv2 8-needle 的 256K 与 512K bin，各 **200 个问题**，每个 **5 次重复**。
+- 任务类型：结构化检索 + 绑定（把最终请求与早期实例的答案绑定）。
+- 划分：论文未披露数据集内划分（推理评测用途）。
+- 配套标注：参考答案字符串（评分需先剥离每个样本的随机前缀）。
+
+##### 3. 数据集内部内容与构成
+- 核心数据类型：长对话/请求历史文本（含多个"针"——需要被检索的早期请求-响应实例）+ 最终请求。
+- 每条样本标准构成字段（推断自论文描述）：随机前缀（必须同时出现在预测与参考的开头）、多轮请求-响应实例（含 8 个针）、最终请求、参考答案。论文原文未逐字段披露 schema。
+- 细分任务清单：论文原文未按子任务细分，仅用 8-needle 变体与 256K/512K 长度 bin。
+
+##### 4. 真实样本示例
+- 论文原文未给出完整原始样本；仅说明：每个样本带一个随机前缀，评分器先验证并剥离该前缀，再计算 EM 与 SequenceMatcher 比率；提示的系统消息内含 xhigh 推理指令。
+- 示例语义（依据任务描述重建）：一段包含 8 个早期"请求→响应"对的长会话 + 末尾"请按当时对 X 的回复作答"之类的绑定请求；答案需精确复现早期响应的内容。
+
+##### 5. 评测标准 & 配套工具
+- 原生配套评测：EM（剥离前缀后字符串完全一致）与 SequenceMatcher ratio（difflib.SequenceMatcher 比率，论文标记为 Seq.）。
+- 官方评测方案：缺失或无效前缀两项均记 0；触发内容过滤的输出留在分母并记 0。
+- 开源地址：HuggingFace `openai/mrcr`；使用限制以数据集卡为准。
+
+##### 6. 本论文使用该数据集的特殊设定
+- 输入限制：使用 256K 与 512K bin（1M bin 超长无法公平测试）；问题恒放末尾；Qwen 的 xhigh 指令前置到系统消息；痕迹截断 50,000 字符。
+- 对照组基线范围：First Pass vs TRACE APPEND vs TRACE AS STATE（各 5 次重复）。
+- 本论文核心指标：DeepSeek 512K EM 45.4→52.6（Tas）；Qwen 512K EM 36.2→46.8；GLM 512K EM 42.6→55.4、Seq. 52.0→70.1；256K 各格同样 Tas 优于 Append。
+
+---
+
+#### 数据集3：NUB-1M Season 2（百万 token 小说理解基准）
+
+##### 1. 基础来源信息
+- **提出作者/团队**：xz-keg 项目（xz-keg, 2026）；官方出处：GitHub `xz-keg/Novel-Understanding-Bench`（1M Novel Understanding Bench）。
+- **原始构建目的**：在整本长篇小说（400–700K token）上评测模型的深度阅读理解能力，题目关于新小说的复杂问题。
+- **本论文使用场景**：主实验的长上下文任务之一（Season 2 小说，20 题 × 5 重复）。
+
+##### 2. 数据集整体规模
+- 论文使用子集：Season 2，**20 个问题**，每个 **5 次重复**。
+- 任务类型：长小说阅读理解（细节检索、跨章节信息整合）。
+- 划分：按季（season）更新以减少泄漏风险；每季的问题与答案人工维护。
+- 配套标注：每题一个参考答案（人工维护），供 DeepSeek V4 Pro 评判使用。
+
+##### 3. 数据集内部内容与构成
+- 核心数据类型：整本新小说文本（400–700K token，作为长上下文 x）+ 复杂阅读理解问题 q + 参考答案。
+- 每条样本标准构成字段：小说全文（x）、问题（q，放提示末尾）、参考答案；评分时把解题者答案与参考答案交给评判模型比较。论文原文未逐字段披露 schema。
+- 细分任务清单：论文原文未披露题目细分类型。
+
+##### 4. 真实样本示例
+- 论文原文未给出完整原始样本（数据按季发布，需访问 GitHub 仓库）。
+- 示例语义（依据任务描述重建）：给出某部新小说的全文，然后提问"小说中角色 A 提到过几次某事件？请说明依据"；解题者输出答案与理由，评判模型对照人工参考答案判定对错。
+
+##### 5. 评测标准 & 配套工具
+- 原生配套评测：accuracy（准确率，0/1）。
+- 官方评测方案：本论文使用 **DeepSeek V4 Pro 作为评判模型**（model-judged），评判提示中排除解题者身份与反馈顺序，返回布尔正确性判定 + 简短理由；论文作者人工复核了评判输出，未发现错误。
+- 开源地址：GitHub `xz-keg/Novel-Understanding-Bench`；按季更新，使用限制以仓库为准。
+
+##### 6. 本论文使用该数据集的特殊设定
+- 输入限制：Season 2 小说；问题从小说文本分离并放提示末尾；痕迹截断 50,000 字符；提示格式 [x, q]、[T, x, q]、[x, T, q]。
+- 对照组基线范围：First Pass vs TRACE APPEND vs TRACE AS STATE。
+- 本论文核心指标：DeepSeek Acc. 60.0→73.0（Tas）；Qwen 37.0→51.0；GLM 43.0→66.0；Tas 全部高于 Append（71.0/49.0/65.0），也全部高于 First Pass。
+
+---
+
+## 贡献与结论
+
+### 贡献
+
+1. **理论贡献**：用条件状态更新任务刻画因果处理器的顺序内存不对称，证明最坏情况下"条件在后"比"条件在前"需要指数级更多内存（⌈b·2^b⌉ vs ⌈b⌉ 比特），并在 Appendix A 给出达到最坏情况的构造性证明；把该结论作为长上下文因果处理的**定性设计原则**。
+2. **方法贡献**：提出 TRACE AS STATE——一种通用的推理期缩放方法：把第一遍生成的推理痕迹序列化为文本状态代理 T，在第二遍新因果 pass 中放在长上下文之前（[T, x]）；pass 之间增加文本反馈，pass 内部保持因果处理，不需要训练或改架构。
+3. **实证贡献**：在 3 个厂商的百万级上下文模型 × 3 个长上下文基准上，27 个模型×任务×指标组合中 TRACE AS STATE 以 26/27 全面胜过严格对照 TRACE APPEND，且全指标高于第一遍；通过 9 条件消融排除"格式脚手架/答案可见性/文本近因/简单重读"等替代解释；通过成对置信区间与问题簇自助法确认统计稳健性。
+
+### 结论
+
+- **作者直接报告的结果（数据层面）**：
+  - 26/27 组合 Tas > Tap；唯一例外 GLM-5.2 GraphWalks BFS F1（75.0 vs 75.8）；
+  - Tas 在全部 27 个组合高于 First Pass；Tap 在多数组合也高于 First Pass；
+  - GraphWalks Parents 上 Tas 达 81.8/91.3（DeepSeek）、96.4/99.1（Qwen）、100.0/100.0（GLM）；
+  - 24 个严格 same-T 单元格中 20 个 95% 区间整体在零以上；
+  - Trace 数量消融：ntr≥1 时 Tas 始终高于 Tap，性能随 ntr 上升。
+- **作者的解释性结论（机制层面）**：
+  - 推理痕迹可携带任务状态信息，且**信息可用的时间点**决定了其有用程度——把状态放在上下文之前可用，比放在之后更有效；
+  - 收益源于**问题特异、任务相关的痕迹信息**（Random Trace 消融排除了通用脚手架解释）；
+  - 该结果与条件状态更新任务的内存分析一致，为因果 Transformer 的长上下文推理提供了一种"状态前置"的通用策略。
+
+## 方法流程图
+
+### TRACE AS STATE 完整运行流程
+
+```
+                        任务输入（长上下文 x + 问题 q）
+                                     │
+                                     ▼
+                    ┌─────────────────────────────────┐
+                    │  CAUSAL PASS 1（第一遍，源遍）    │
+                    │  模型 M 以 [x, q] 生成             │
+                    │  推理痕迹 rⱼ 与可见答案 aⱼ         │
+                    └─────────────────────────────────┘
+                          │（对同一问题独立运行 ntr 次，ntr=5）
+                          ▼
+               r₁, r₂, …, r₅（源顺序保留）
+                          │
+                          ▼
+            ┌─────────────────────────────┐
+            │ 序列化器 π（固定、各条件一致） │
+            │ T = PD + <first_run_        │
+            │     reasoning_traces>       │
+            │   [Trace 1] r₁              │
+            │   [Trace 2] r₂              │
+            │   …                         │
+            │   [Trace ntr] rₙtr          │
+            │ </first_run_reasoning_traces>│
+            │（超长痕迹截断至 50,000 字符） │
+            └─────────────────────────────┘
+                          │
+              ┌───────────┴───────────┐
+              │ 相同的 x、T、模型 M    │
+              ▼                       ▼
+┌─────────────────────────┐  ┌─────────────────────────┐
+│ TRACE APPEND [x, T, q]  │  │ TRACE AS STATE [T, x, q] │
+│ 上下文在前、痕迹在后     │  │ 痕迹在前、上下文在后       │
+│                         │  │                          │
+│ T 只能影响后续推理与答案  │  │ T 在重读 x 时即可用，能     │
+│ ← 关键区别：无法改变已    │  │ 影响 x 早期位置的表示       │
+│   形成的 x 的表示        │  │ ← 对应"条件在先"原则：      │
+│                         │  │   状态先于信息序列         │
+└─────────────────────────┘  └─────────────────────────┘
+              │                       │
+              ▼                       ▼
+       (r'_Tap, a'_Tap)         (r'_Tas, a'_Tas)
+              └───────────┬───────────┘
+                          ▼
+              按基准口径评分（EM / F1 / Seq. / Acc.）
+              5 次重复取平均，失败案例记 0
+                          ▼
+             26/27 组合：Tas > Tap（Table 2）
+```
+
+### 流程图文字说明
+
+1. **第一遍（源遍）**：模型以原始 [x, q] 处理任务，输出"推理痕迹 + 可见答案"。痕迹是任务状态的文本代理素材。
+2. **序列化**：π 把 ntr 条痕迹按源顺序打包成固定格式 T（含数据集前言 PD 与 XML 式分隔标签），保证两种放置条件使用**字节级相同**的 T。
+3. **分流对比**：第二遍两条分支共享 x、T、M，唯一区别是顺序——Tap 的 T 在 x 之后（状态晚到），Tas 的 T 在 x 之前（状态先到）。
+4. **机制解释**：Tas 下模型重新处理 x 时就能看到 T（对应"条件在先"）；Tap 下 T 只能影响后半段推理与答案，无法回头改变已形成的 x 表示（对应"条件在后"）。这正是 §3.1 内存分离分析的定性体现。
+5. **评分**：两分支输出分别评分、平均，直接对比"同一状态代理、不同可用时机"的效果。
+
+## 局限性与后续方向
+
+- **接口依赖**：当前实现依赖模型暴露原始推理痕迹（或某种状态接口）；只暴露最终答案的模型/API 需要不同的接口。
+- **成本**：增加一遍推理，latency 与 token 成本明显上升（Table 6 显示第二遍输入成本与第一遍同量级）；状态前置还可能降低多轮场景的 KV 缓存复用。
+- **覆盖范围**：仅覆盖 3 个模型、3 个任务族（GraphWalks、MRCR、NUB-1M），未评估多轮智能体任务；更广的模型/领域/长度/交互场景需要更多验证。
+- **伦理**：方法只复用模型自身生成的痕迹，不引入超出底层模型与任务本身的额外伦理或滥用风险。
+- **后续方向（作者提出）**：痕迹选择/压缩、学习更好的文本状态接口、优化反馈放置位置；更广泛的训练框架可联合学习模型与反馈接口，同时保持每个 pass 内部因果。
+
+
+
+
+
+## 疑惑
+- 作者认为在长任务当中，很多前期的决策是需要后期才能拿到的内容的反馈？所以他把长任务变成一种状态表示的？
+  作者的核心不是 "前期决策需要后期反馈"，而是 ——**长任务里 "维持任务状态" 所需的信息，往往到上下文后期才出现；而因果注意力下，后期出现的信息无法回头影响早期已经形成的表示**。这就是论文开头说的 "输入顺序与推理顺序的错配"（mismatch）。整篇论文就是把这件事形式化，再给出一个简单的补救办法：**把第一遍的推理痕迹当作 "任务状态的文本代理"，在第二遍扫描时放到上下文的最前面**。
+
+- "因果处理器" 到底是什么
+
+  论文把 Transformer 的注意力机制抽象成一个更简单的模型，叫**因果状态更新处理器（causal state-update processor）**：
+
+  > **s_t = U(s_{t-1}, c_t)** —— 来一个信息单元 c_t，就立刻更新一次 "运行状态" s。
+
+  它有三个特点：
+
+  1. **只看过去**：处理第 t 个单元时，只能用到 c₁…c_t（这就是 "因果"）；后面的信息对它不可见。
+  2. **即时更新**：每个单元到达就更新状态，不能 "先攒着，等以后再说"。
+  3. **不能回头看**：已经处理完的位置，它的表示不会因为后来的信息而改变。
+
+  打个比方：像一个只能 "逐条记账、不能涂改" 的记账员。如果某笔账需要 "月底才知道的总额" 才能记对，那他在月初记的那笔就是错的，而且**没法回头改**。
+
+  **图 1A 画的就是这个**：c₁ → U → s₁ → U → s₂ → … → s_n，一条从左到右、只进不退的状态流。
+
+- 论文的核心问题：条件状态更新任务（图 1B）
+
+  论文设计了一个最小任务来放大这个问题 ——**条件状态更新任务（conditional state update task）**：从条件 z 指定的状态出发，依次施加一串信息 C = (c₁, …, c_k)。
+
+  关键在于 **z 放在 C 的前面还是后面**，两种顺序最坏情况下的内存需求是**指数级差距**：
+
+|                | 条件在前 (z, C)                             | 条件在后 (C, z)                                              |
+| -------------- | ------------------------------------------- | ------------------------------------------------------------ |
+| 处理器怎么干活 | 一开始就知道状态是 z，每来一个 c_t 更新一次 | 处理 C 时不知道 z 是什么，为了将来能用，必须保留 C 对**每一种可能 z** 的作用 |
+| 需要存多少     | **一条状态路径**（one state path）          | **大量残差映射**（many residual maps），数量随可能条件数指数增长 |
+| 结果           | 很省                                        | 最坏情况：**指数级内存差距**                                 |
+
+- 图 1 怎么讲这篇论文的方法
+
+  图 1 是四格拼图，**A→B→C→D 恰好是 "问题 → 形式化 → 直觉 → 解法" 的叙事线**：
+
+  - **A（Causal state updates）**：定义因果处理器是什么（上面讲的记账员模型）。
+
+  - **B（Order-dependent memory）**：形式化 "信息顺序" 如何造成指数级内存浪费 —— 条件在前的顺序好，条件在后的顺序糟。
+
+  - **C（Trace as State）**：提出关键直觉 ——**推理痕迹（trace）T 可以当 "任务状态的文本代理"（task state proxy）**。现代推理模型（DeepSeek、Qwen 等）在给出答案前会输出一大段推理文本，这段文本恰好把 "中间状态" 外化成可读的文字了。把这段文字 T 拿来用，就相当于把看不见的任务状态 "搬到了明面上"。
+
+  - **D（Feedback across causal passes）**：给出具体做法，两遍扫描（论文全文都在讲这个）：
+
+    1. **Pass 1（推理，只读一次）**：输入 x → 模型 M → 得到推理痕迹 r 和可见答案 a → 用序列化器 π 把 r 打包成固定格式的 T（图 D 上方：`x → M → r,a → π → T`，标注 "reasoning only"）。
+    2. **Pass 2（重读）**：让模型把上下文再读一遍，把 T 插进去。两种插法对比：
+       - **TRACE AS STATE [T, x]**：T 放在长上下文 x 的**前面**（图 D 右下）。这样模型重读时，任务状态在**一开始就可用了**—— 相当于把 "条件在后" 改成了 "条件在前"，把坏情况扭成好情况。
+       - **TRACE APPEND [x, T]**：T 放在 x 的**后面**（图 D 左下）。T 虽然也能指导后半段的推理和答案，但**它影响不了已经处理完的前面那些表示**—— 这就是对照实验（ablation 里的 "放置对照"）。
+
+    注意图 D 顶部那行小字：
+
+    ```
+    same x, same T, same model M
+    ```
+
+    —— 两次 pass 用的是同一个模型、同一份上下文、同一份痕迹，
+
+    唯一变量就是 T 放在哪
+
+    ，这样才能干净地证明 "位置" 本身起作用。
+
+
+- **大白话总结整篇论文**：长任务里有些 "账" 要等读完后面才知道怎么记，因果模型记不好前面的账。作者发现：让模型先 "打草稿"（第一遍推理），把草稿（痕迹 T）放到前面，再让它重读一遍 —— 等于提前把答案需要的 "状态" 喂到开头，记账就记对了。成本只是多读一遍，不改变模型本身。
+
+下面这张图是我根据论文图 1 重画的简化示意（**示意**，非原图），把三条主线 —— 因果处理器、条件先后对比、两遍流程 —— 放在一起看：
+
+<div style="width:100%;box-sizing:border-box;font-family:'Segoe UI','Microsoft YaHei',sans-serif;background:#faf6ee;color:#2b2118;padding:18px;line-height:1.55;">
+<div style="font-size:15px;font-weight:700;margin-bottom:4px;">TRACE AS STATE（痕迹即状态）—— 论文图 1 的简化示意（示意）</div>
+<div style="font-size:13px;color:#8a6f52;margin-bottom:16px;">三部分对应图 1A / 图 1B / 图 1C+D：问题 → 形式化 → 解法</div>
+<div style="background:#fff;border:1px solid #e2d5c0;border-radius:10px;padding:12px 14px;margin-bottom:14px;">
+  <div style="font-weight:700;color:#5d4426;margin-bottom:8px;">① 因果状态更新处理器（图 1A）—— 每来一个信息单元就更新一次状态，只看前缀、不能回头</div>
+  <div style="display:flex;flex-wrap:wrap;align-items:center;gap:6px;font-size:14px;">
+    <span style="background:#f3ead9;border:1px solid #cbb391;border-radius:6px;padding:4px 10px;">c₁</span><span style="color:#a08050;">→</span>
+    <span style="background:#eef2e4;border:1px solid #a9b883;border-radius:6px;padding:4px 10px;font-family:Georgia,serif;font-style:italic;">U</span><span style="color:#a08050;">→</span>
+    <span style="background:#f3ead9;border:1px solid #cbb391;border-radius:6px;padding:4px 10px;">s₁</span><span style="color:#a08050;">→</span>
+    <span style="background:#eef2e4;border:1px solid #a9b883;border-radius:6px;padding:4px 10px;font-family:Georgia,serif;font-style:italic;">U</span><span style="color:#a08050;">→</span>
+    <span style="background:#f3ead9;border:1px solid #cbb391;border-radius:6px;padding:4px 10px;">s₂</span><span style="color:#a08050;">→</span><span style="color:#a08050;">…</span><span style="color:#a08050;">→</span>
+    <span style="background:#f3ead9;border:1px solid #cbb391;border-radius:6px;padding:4px 10px;">sₙ</span>
+    <span style="margin-left:8px;font-size:13px;color:#6b5b45;">公式：s_t = U(s_{t−1}, c_t)</span>
+  </div>
+</div>
+<div style="background:#fff;border:1px solid #e2d5c0;border-radius:10px;padding:12px 14px;margin-bottom:14px;">
+  <div style="font-weight:700;color:#5d4426;margin-bottom:8px;">② 条件状态更新任务（图 1B）—— 同一份输入，顺序不同，最坏内存指数级差距</div>
+  <div style="display:flex;flex-wrap:wrap;gap:12px;">
+    <div style="flex:1;min-width:280px;background:#f0f6ea;border:1px solid #a9c08a;border-radius:8px;padding:10px 12px;">
+      <div style="font-weight:700;color:#4a6b2f;">条件在前 z, C（好）</div>
+      <div style="font-size:14px;margin:6px 0;">[z] → [c₁…cₖ] → 处理器一开始就知道状态，逐条更新</div>
+      <div style="font-size:13px;color:#4a6b2f;">只需跟踪 <b>一条状态路径</b>（one state path）</div>
+    </div>
+    <div style="flex:1;min-width:280px;background:#fbeae6;border:1px solid #d99a86;border-radius:8px;padding:10px 12px;">
+      <div style="font-weight:700;color:#a04a2f;">条件在后 C, z（坏）</div>
+      <div style="font-size:14px;margin:6px 0;">[c₁…cₖ] → [z] → 处理 C 时不知道 z，必须为每种可能条件保留作用</div>
+      <div style="font-size:13px;color:#a04a2f;"><b>大量残差映射</b>（many residual maps）→ 最坏情况 <b>指数级内存</b></div>
+    </div>
+  </div>
+</div>
+<div style="background:#fff;border:1px solid #e2d5c0;border-radius:10px;padding:12px 14px;">
+  <div style="font-weight:700;color:#5d4426;margin-bottom:8px;">③ 解法：两遍扫描 + 痕迹作状态（图 1C+D）</div>
+  <div style="font-size:14px;margin-bottom:6px;"><b>Pass 1（推理）：</b>[x] → [M] → [r, a] → <span style="font-family:Georgia,serif;font-style:italic;">π</span> 序列化 → [T]</div>
+  <div style="font-size:13px;color:#6b5b45;margin-bottom:10px;">T = 推理痕迹，任务状态的<b>文本代理</b>（图 1C：trace T → task state proxy）</div>
+  <div style="font-size:14px;margin-bottom:6px;"><b>Pass 2（重读）：</b>同一模型 M、同一份 x、同一份 T，只有放置位置不同</div>
+  <div style="display:flex;flex-wrap:wrap;gap:12px;">
+    <div style="flex:1;min-width:280px;background:#f0f6ea;border:1px solid #a9c08a;border-radius:8px;padding:10px 12px;">
+      <div style="font-weight:700;color:#4a6b2f;">TRACE AS STATE [T, x] ✔</div>
+      <div style="font-size:14px;margin:6px 0;">[T] → [x] → [M] → r′, a′</div>
+      <div style="font-size:13px;color:#4a6b2f;">状态在重读一开始就可用了 = 把“条件在后”扭成“条件在前”</div>
+    </div>
+    <div style="flex:1;min-width:280px;background:#fdf3e0;border:1px solid #d9b884;border-radius:8px;padding:10px 12px;">
+      <div style="font-weight:700;color:#9a6b2a;">TRACE APPEND [x, T]</div>
+      <div style="font-size:14px;margin:6px 0;">[x] → [T] → [M] → r′, a′</div>
+      <div style="font-size:13px;color:#9a6b2a;">T 只能影响后半段，<b>无法回头改前面已形成的表示</b>（对照）</div>
+    </div>
+  </div>
+  <div style="margin-top:10px;font-size:13px;color:#5d4426;">结果：3 模型 × 3 数据集 × 3 指标 = 27 个组合中，TRACE AS STATE 胜出 26 个。</div>
+</div>
+</div>
+
+
+- 我感觉你这句话说的我不太理解（这跟长上下文推理有什么关系？ 作者观察到：长任务中很多 "任务状态"—— 比如搜索中 "当前的活动目标"、"搜索前沿（frontier）"、"被拒绝的假设集合"—— 往往要在读完了上下文里比较靠后的部分之后才能确定下来。而早期处理恰恰需要它们。这正好命中 "条件在后" 的坏情况：模型在早期被迫对 "所有可能的状态" 都留一手，表现自然差。）能不能举出一个通俗易懂的例子？
+
+  ## 例子：读一份 500 页的案情卷宗
+
+  假设你的任务是：**从头到尾读完一份案情卷宗，判断谁是凶手**。这份卷宗就是 "长上下文"，你是那个因果处理器 ——**只能一页页顺序读，读过的页不能回头改**。
+
+  **1. 任务状态是什么？** 读卷宗时，你脑子里得持续维护一个 "嫌疑人名单"：谁最可疑、谁已被排除、目前证据链指向谁。这就是论文说的**任务状态**（活动目标、搜索前沿、被拒假设）。
+
+  **2. 为什么状态要到后期才能确定？** 关键证据全在卷宗**最后 50 页**：第 470 页才出现管家案发当晚的不在场证明是伪造的，第 485 页才说明 "能打开密室的人只有管家"，第 490 页才证明园丁的证词是在说谎。也就是说 ——**"凶手是管家" 这个结论，只有读到后面才知道**。
+
+  **3. 早期处理恰恰需要它 —— 问题来了** 你读第 30 页园丁的证词时，**并不知道后面会出现什么**。这段证词可能指认管家，也可能洗清管家，完全取决于你还没读到的部分。
+
+  因果处理器不能回头改，那你读前面时该怎么办？只能**同时维护多个版本的故事**：
+
+  - 版本 A：假设凶手是管家 → 园丁这段证词是在**包庇**（园丁收了好处）……
+  - 版本 B：假设凶手是园丁 → 这段证词是在**栽赃**（园丁嫁祸管家）……
+  - 版本 C：假设凶手是女仆 → 这段证词说明管家和女仆有**勾结**……
+
+  每读一页，每个版本都要重新解释一遍这一页。凶手候选有 k 个，你就得同时记 k 套 "对全部前面内容的解读"—— 这就是图 1B 里的 **many residual maps（大量残差映射）**。候选越多、卷宗越长，这套 "多版本账本" 越滚越大，**组合数指数增长**，你的脑子很快就装不下了。
+
+  而且更糟的是：因为早期没确定状态，你前面形成的印象是**含混的**——"这页好像谁都指认、又谁都洗不清"。最后真相大白时，前面 400 页的理解已经 "长歪" 了，**没法回头改**。
+
+  **4. 对应的论文术语**（一行对一行）：
+
+  |        卷宗例子         |                  论文术语                  |
+  | :---------------------: | :----------------------------------------: |
+  |  嫌疑人名单、谁最可疑   | 任务状态（活动目标 / 搜索前沿 / 被拒假设） |
+  |  关键证据在最后 50 页   |        状态到上下文**后期**才被发现        |
+  |   读前面时不知道凶手    |      条件（z）在信息序列（C）**之后**      |
+  |  同时维护 k 套故事解读  |       为每种可能状态保留**残差映射**       |
+  | k 套解读 × 每页都重解释 |           **最坏情况指数级**内存           |
+
+  **5. TRACE AS STATE 怎么救场**
+
+  - **Pass 1（第一遍通读）**：你先把 500 页快速读一遍（允许自己 "打草稿"），最后你写出一份**破案分析草稿**："初步判断重点怀疑管家，理由是密室钥匙、不在场证明伪造……"—— 这份草稿就是**推理痕迹 T**。
+  - **Pass 2（带着草稿重读）**：把草稿放**卷宗最前面**，从头再读一遍。这次你一上来就知道重点盯谁、哪些证词是关键的，前面每一页都带着明确的状态去读 —— 不用再同时记 k 套版本了。
+  - 对比 TRACE APPEND：把草稿放**卷宗最后面**，那你读到前面 400 页时还是不知道重点，草稿只能在你读完卷宗后帮你总结，**救不了前面已经长歪的理解**。
+
+  ------
+
+  一句话：**"条件在后" 的坏处不是 "少看了信息"，而是 "早期被迫对所有可能性留一手，导致表示模糊 + 内存爆炸"；TRACE AS STATE 等于先用一遍通读把状态确定下来，第二遍带着正确答案重读。**
+
+- 通过着你个破案的例子，我大概知道了这篇方法了，但我还有一些不太理解的地方，例如因果处理器不能回头改，你说的因果处理器就是 transformer 结构吧？那 LLM 都是 Decoder 结构的，输出是一个一个往外吐的，但是每一次输出之前都会把之前的输出再重新输入进去呀？为什么说 transformer 不能回头改？
+
+  好问题 —— 这几乎是每个第一次读这篇论文的人都会卡住的地方。直接给你答案：**你说的 "重新输入" 确实存在，但它发生在 "两遍之间"，不是 "一遍之内"**。论文说的 "不能回头改" 特指**同一遍扫描内部**。
+
+  ## 先分清两个层面
+
+  **第一层：一遍 pass 内部（论文讨论的对象）**
+
+  Decoder 模型处理一段输入时，所有位置是 "一起" 做 attention 的，但每个位置 i **只能看到 1..i**（因果掩码）。所以：
+
+  - 位置 i 的隐藏表示 hᵢ 一旦算出，就**只含前缀信息**；
+  - 位置 j > i 的内容，在数学上**永远进不了 hᵢ**—— 无论你之后读到什么，hᵢ 不会变。
+
+  这就是 "固化"。破案例子里，第 30 页的 "解读" 在你读它那一刻就定稿了，只用了前 30 页的信息；读完 500 页知道凶手后，第 30 页的解读**不会自动更新**。
+
+  **第二层：跨 pass / 跨生成步（你说的 "重新输入"）**
+
+  自回归生成第 t+1 个 token 时，确实把 `[x, y₁…y_t]` 重新作为输入（或者用 KV cache 复用前面算好的表示、只算新位置）。但注意它的方向性：
+
+  - **新位置**（新生成的 token）在末尾，它能看到前面**所有**内容 → 新位置受益；
+  - **旧位置**的表示仍然不变 —— 它就是原来的 hᵢ，不会因为末尾多了新 token 而被改写。
+
+  所以 "重新输入" 让新 token 占便宜，**救不了已经处理过的旧位置**。信息只能往前流，永远不能回头改 —— 这正是 "因果" 二字的含义。
+
+  ## 那怎么 "救" 旧位置？→ 再来一遍 pass，把信息挪到前缀
+
+  这就是 TRACE AS STATE 的全部秘密：第二遍 pass 的输入是 `[T, x]`，**T 放在最前面**。重读时，x 的每一个位置（包括第 30 页）的前缀里都多了 T，所以它们**这次能看到 T 了**。
+
+  换句话说，"两遍扫描" 不是模型内部能回头改，而是：**把后期才知道的信息搬到最前面，让所有位置重新处理一遍**。破案例子里，第二遍你带着草稿从第 1 页重读 —— 这次第 30 页之前就写着 "重点怀疑管家"，第 30 页的解读自然不同了。
+
+  下面这张图把 "为什么不能回头改" 和 "为什么挪到前面就行" 画在一起：
+
+<div style="width:100%;box-sizing:border-box;font-family:'Segoe UI','Microsoft YaHei',sans-serif;background:#faf6ee;color:#2b2118;padding:16px;line-height:1.5;"> <div style="font-size:15px;font-weight:700;margin-bottom:2px;">为什么 Transformer "不能回头改"（示意）</div> <div style="font-size:13px;color:#8a6f52;margin-bottom:14px;">位置 i 的表示只看它前面的内容；后面的信息想改它，被因果掩码挡住</div>  <svg viewBox="0 0 980 520" width="100%" xmlns="http://www.w3.org/2000/svg" style="background:#fff;border:1px solid #e2d5c0;border-radius:10px;">   <text x="20" y="34" font-size="15" font-weight="700" fill="#5d4426">第一遍 pass：位置 i 只看到前缀，看不到后面</text>    <!-- tokens row 1 -->   <g font-size="13" text-anchor="middle">     <rect x="40"  y="60" width="56" height="34" rx="6" fill="#f3ead9" stroke="#cbb391"/>     <text x="68"  y="81" fill="#2b2118">x₁</text>     <rect x="108" y="60" width="56" height="34" rx="6" fill="#f3ead9" stroke="#cbb391"/>     <text x="136" y="81" fill="#2b2118">x₂</text>     <rect x="176" y="60" width="56" height="34" rx="6" fill="#f3ead9" stroke="#cbb391"/>     <text x="204" y="81" fill="#2b2118">x₃</text>     <rect x="244" y="60" width="56" height="34" rx="6" fill="#e8f0f7" stroke="#7fa3c4"/>     <text x="272" y="81" fill="#2b2118">x₄</text>     <rect x="312" y="60" width="56" height="34" rx="6" fill="#f3ead9" stroke="#cbb391"/>     <text x="340" y="81" fill="#2b2118">x₅</text>     <rect x="380" y="60" width="56" height="34" rx="6" fill="#f3ead9" stroke="#cbb391"/>     <text x="408" y="81" fill="#2b2118">…</text>     <rect x="448" y="60" width="56" height="34" rx="6" fill="#fbeae6" stroke="#d99a86"/>     <text x="476" y="81" fill="#2b2118">xₙ</text>   </g>    <!-- visible range arrow for x4 -->   <path d="M 68 104 L 272 104" stroke="#7fa3c4" stroke-width="3" fill="none" marker-end="url(#arblu)"/>   <text x="150" y="124" font-size="12" fill="#4a6b8f" text-anchor="middle">位置 x₄ 能看到的范围（前缀）</text>    <!-- blocked arrow from later -->   <path d="M 476 84 L 300 130" stroke="#c0392b" stroke-width="2.5" stroke-dasharray="6 4" fill="none" marker-end="url(#arred)"/>   <g transform="translate(330,150)">     <rect x="-150" y="0" width="300" height="52" rx="8" fill="#fbeae6" stroke="#d99a86"/>     <text x="0" y="20" font-size="13" fill="#a04a2f" text-anchor="middle" font-weight="700">因果掩码挡住：后面的信息（凶手是谁）</text>     <text x="0" y="40" font-size="13" fill="#a04a2f" text-anchor="middle">永远改不了 x₄ 已经定稿的表示</text>   </g>    <text x="20" y="270" font-size="15" font-weight="700" fill="#5d4426">第二遍 pass：把 T 放到最前面，所有位置都能看到它</text>    <!-- T first -->   <g font-size="13" text-anchor="middle">     <rect x="40"  y="296" width="72" height="34" rx="6" fill="#eef2e4" stroke="#7f9b5a"/>     <text x="76"  y="317" fill="#3f5c22" font-weight="700">T</text>     <rect x="124" y="296" width="56" height="34" rx="6" fill="#f3ead9" stroke="#cbb391"/>     <text x="152" y="317" fill="#2b2118">x₁</text>     <rect x="192" y="296" width="56" height="34" rx="6" fill="#f3ead9" stroke="#cbb391"/>     <text x="220" y="317" fill="#2b2118">x₂</text>     <rect x="260" y="296" width="56" height="34" rx="6" fill="#f3ead9" stroke="#cbb391"/>     <text x="288" y="317" fill="#2b2118">x₃</text>     <rect x="328" y="296" width="56" height="34" rx="6" fill="#e8f0f7" stroke="#7fa3c4"/>     <text x="356" y="317" fill="#2b2118">x₄</text>     <rect x="396" y="296" width="56" height="34" rx="6" fill="#f3ead9" stroke="#cbb391"/>     <text x="424" y="317" fill="#2b2118">…</text>     <rect x="464" y="296" width="56" height="34" rx="6" fill="#f3ead9" stroke="#cbb391"/>     <text x="492" y="317" fill="#2b2118">xₙ</text>   </g>    <!-- green arrows from T to all -->   <g stroke="#7f9b5a" stroke-width="2.5" fill="none" marker-end="url(#argrn)">     <path d="M 76 330 C 76 360, 152 360, 152 344"/>     <path d="M 76 330 C 76 368, 220 368, 220 344"/>     <path d="M 76 330 C 76 376, 288 376, 288 344"/>     <path d="M 76 330 C 76 384, 356 384, 356 344"/>     <path d="M 76 330 C 76 384, 492 384, 492 344"/>   </g>    <g transform="translate(560,392)">     <rect x="0" y="0" width="380" height="60" rx="8" fill="#f0f6ea" stroke="#a9c08a"/>     <text x="190" y="22" font-size="13" fill="#3f5c22" text-anchor="middle" font-weight="700">重读时 x₄ 的前缀里多了 T → x₄ 这次能看到任务状态</text>     <text x="190" y="44" font-size="12" fill="#4a6b2f" text-anchor="middle">这等于把“条件在后”改成了“条件在前”</text>   </g>    <text x="20" y="492" font-size="12" fill="#8a6f52">注：KV cache 只复用“已定稿”的旧表示；要让早期位置看到新信息，必须重跑一遍含 T 的前缀。</text>    <defs>     <marker id="arblu" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#7fa3c4"/></marker>     <marker id="arred" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#c0392b"/></marker>     <marker id="argrn" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#7f9b5a"/></marker>   </defs> </svg> </div>
+
+
+
+- 我大概明白你说的意思了，也就是说 Decoder 在输出后续 Xn 个 token 的时候看的到前 Xn-1个token，但看不到之后的token，所以面对长任务时候就会有很多残差图，哪怕后续的token推翻了前面的推理，但是也没有办法修改前面的token了，所以第一遍推理的时候，就把推理过程作为T，放到第二遍推理的时候，这样Decoder的每次输入就是[T,Xn],这样就能减少残差图，减少很多花销是吧？但是我还有一些不理解的点，就是关于transformer的机制，比如这句话（Decoder 模型处理一段输入时，所有位置是 "一起" 做 attention 的，但每个位置 i 只能看到 1..i（因果掩码））、自回归生成第 t+1 个 token 时，什么是自回归？什么是KV cache？请你帮我补一下transformer的相关知识，最好就做成这样的html文件直观展示，便于我理解transformer和这篇文章中怎么对transformer做工作的？还有一点我也不太理解，既然TRACE AS STATE要推理两遍，也就是把第一遍的思考过程作为T给第二遍里面作为每次推理的输入，那已经在第一遍得到结果了啊？为什么还要推理第二遍？
+
+  
+
+  三个问题的精炼回答：
+
+  1. **自回归**：模型每一步只预测 "下一个 token"，预测完拼到末尾再预测下一个 —— 所以每一步输入 = 全部已生成内容，永远看不到未来。
+  2. **KV cache**：生成新 token 时要 attend 到前面所有 token，缓存把前面算好的 K/V 存起来避免重算 —— 但缓存的是 "已定稿的旧表示"，不改变因果性。
+  3. **为什么第二遍**：第一遍的答案是在 "不知道任务状态" 时盲答的（准确率低，如 Parents 仅 29.2%）；第二遍带着草稿 T 重读、重新作答（81.8%）。注意：这不是省钱，是多花一遍推理买准确率。
+
+  页面里还纠正了你理解中的一处：TRACE AS STATE **不减少开销**，反而 token 用量增加（附录 F），减少的是 "为所有可能状态留残差映射" 的负担。可以查看链接：
+
+  

@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Transformer 基础与 TRACE AS STATE 图解</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%236d8a4e'/%3E%3Ctext x='16' y='23' font-size='18' font-weight='700' text-anchor='middle' fill='%23fff' font-family='Georgia'%3ET%3C/text%3E%3C/svg%3E">
+<style>
+  :root{
+    --bg:#faf6ee; --card:#ffffff; --ink:#2b2118; --sub:#6b5b45; --line:#e2d5c0;
+    --green:#6d8a4e; --green-bg:#f0f6ea; --green-bd:#a9c08a; --green-ink:#3f5c22;
+    --red:#b05a3c; --red-bg:#fbeae6; --red-bd:#d99a86; --red-ink:#8c3d22;
+    --amber:#c8a15c; --amber-bg:#fdf3e0; --amber-bd:#d9b884; --amber-ink:#8a6426;
+    --blue:#7fa3c4; --blue-bg:#eef4f9; --blue-ink:#3d6283;
+  }
+  *{box-sizing:border-box;margin:0;padding:0;}
+  html{scroll-behavior:smooth;}
+  body{background:var(--bg);color:var(--ink);font-family:'Segoe UI','Microsoft YaHei','PingFang SC','Hiragino Sans GB',sans-serif;line-height:1.7;font-size:15px;}
+  .wrap{max-width:980px;margin:0 auto;padding:28px 22px 80px;}
+  /* header */
+  header{border-bottom:2px solid var(--line);padding-bottom:18px;margin-bottom:26px;}
+  .kicker{font-size:13px;letter-spacing:2px;color:var(--green-ink);font-weight:700;margin-bottom:6px;}
+  h1{font-size:27px;line-height:1.35;margin-bottom:8px;}
+  .sub{color:var(--sub);font-size:14.5px;}
+  nav.toc{display:flex;flex-wrap:wrap;gap:8px;margin:18px 0 6px;}
+  nav.toc a{text-decoration:none;font-size:13.5px;background:var(--card);border:1px solid var(--line);color:var(--ink);padding:10px 14px;border-radius:20px;display:inline-flex;align-items:center;min-height:44px;}
+  nav.toc a:hover{border-color:var(--green);color:var(--green-ink);}
+  /* sections */
+  section{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:22px 24px;margin-bottom:24px;}
+  h2{font-size:20px;margin-bottom:6px;}
+  h2 .no{display:inline-block;background:var(--green);color:#fff;border-radius:8px;font-size:14px;padding:2px 9px;margin-right:10px;vertical-align:3px;}
+  .lead{color:var(--sub);font-size:14.5px;margin-bottom:14px;}
+  h3{font-size:16px;margin:18px 0 8px;color:var(--ink);}
+  p{margin:8px 0;}
+  .hl{background:var(--amber-bg);border-left:4px solid var(--amber);padding:8px 14px;border-radius:8px;margin:12px 0;font-size:14.5px;}
+  .hl b{color:var(--amber-ink);}
+  .note{background:var(--blue-bg);border-left:4px solid var(--blue);padding:8px 14px;border-radius:8px;margin:12px 0;font-size:14px;color:var(--blue-ink);}
+  .warn{background:var(--red-bg);border-left:4px solid var(--red);padding:8px 14px;border-radius:8px;margin:12px 0;font-size:14px;color:var(--red-ink);}
+  .ok{background:var(--green-bg);border-left:4px solid var(--green);padding:8px 14px;border-radius:8px;margin:12px 0;font-size:14px;color:var(--green-ink);}
+  .formula{font-family:Georgia,'Times New Roman',serif;font-style:italic;font-size:16px;text-align:center;background:var(--bg);border:1px dashed var(--line);border-radius:10px;padding:10px;margin:12px 0;}
+  /* token chips */
+  .tokens{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:10px 0;}
+  .tok{display:inline-flex;align-items:center;justify-content:center;min-width:44px;min-height:44px;padding:4px 10px;border-radius:8px;border:1px solid var(--line);background:var(--bg);font-size:15px;}
+  .tok.c{background:var(--blue-bg);border-color:var(--blue);font-weight:700;}
+  .tok.g{background:var(--green-bg);border-color:var(--green-bd);font-weight:700;}
+  .tok.dim{opacity:.35;}
+  .arrow{color:var(--amber);font-size:18px;font-weight:700;padding:0 2px;}
+  /* controls */
+  .ctrl{display:flex;flex-wrap:wrap;gap:10px;margin:14px 0 4px;}
+  button{font-family:inherit;font-size:14.5px;padding:11px 20px;border-radius:10px;border:1px solid var(--green);background:var(--green);color:#fff;cursor:pointer;min-height:44px;}
+  button.ghost{background:var(--card);color:var(--green-ink);}
+  button:hover{filter:brightness(1.06);}
+  button:disabled{opacity:.45;cursor:not-allowed;}
+  .status{font-size:14px;color:var(--sub);min-height:22px;margin-top:8px;}
+  /* matrix */
+  .matwrap{display:flex;flex-wrap:wrap;gap:20px;align-items:flex-start;margin:14px 0;}
+  .mat{display:grid;grid-template-columns:repeat(6,46px);gap:4px;}
+  .mcell{width:46px;height:46px;border-radius:7px;display:flex;align-items:center;justify-content:center;font-size:14px;border:1px solid var(--line);background:var(--bg);cursor:pointer;transition:background .15s;}
+  .mcell.on{background:var(--green-bg);border-color:var(--green);font-weight:700;}
+  .mcell.off{background:#f4ede0;color:#b5a68e;}
+  .mcell.block{background:var(--red-bg);border-color:var(--red-bd);color:var(--red-ink);}
+  .mcell:hover{outline:2px solid var(--amber);}
+  .legend{font-size:14px;color:var(--sub);margin-top:8px;}
+  .legend i{display:inline-block;width:14px;height:14px;border-radius:4px;margin:0 4px 0 10px;vertical-align:-2px;}
+  /* kv compare */
+  .kvcols{display:flex;flex-wrap:wrap;gap:16px;margin:12px 0;}
+  .kvcol{flex:1;min-width:300px;border:1px solid var(--line);border-radius:12px;padding:14px 16px;background:var(--bg);}
+  .kvcol h4{font-size:15px;margin-bottom:8px;}
+  .kvcol.bad{border-color:var(--red-bd);}
+  .kvcol.good{border-color:var(--green-bd);}
+  .kvrow{display:flex;flex-wrap:wrap;gap:4px;align-items:center;margin:6px 0;font-size:12.5px;}
+  .kvtok{width:40px;height:34px;border-radius:6px;display:flex;align-items:center;justify-content:center;border:1px solid var(--line);background:#fff;font-size:14px;}
+  .kvtok.re{background:var(--red-bg);border-color:var(--red-bd);}
+  .kvtok.fa{background:var(--green-bg);border-color:var(--green-bd);}
+  .kvtok.new{background:var(--amber-bg);border-color:var(--amber-bd);font-weight:700;}
+  /* pipeline */
+  .pipe{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:center;margin:12px 0;font-size:14px;}
+  .pnode{background:var(--bg);border:1px solid var(--line);border-radius:9px;padding:8px 13px;min-height:40px;display:flex;align-items:center;}
+  .pnode.x{background:var(--blue-bg);border-color:var(--blue);}
+  .pnode.m{background:var(--amber-bg);border-color:var(--amber-bd);}
+  .pnode.t{background:var(--green-bg);border-color:var(--green);font-weight:700;}
+  .pnode.r{background:var(--red-bg);border-color:var(--red-bd);}
+  .pcaption{font-size:14px;color:var(--sub);text-align:center;margin:6px 0 14px;}
+  /* cards */
+  .cards{display:flex;flex-wrap:wrap;gap:14px;margin:14px 0;}
+  .card{flex:1;min-width:260px;border:1px solid var(--line);border-radius:12px;padding:16px;background:var(--bg);}
+  .card h4{font-size:15.5px;margin-bottom:6px;}
+  .card.bad{background:var(--red-bg);border-color:var(--red-bd);}
+  .card.good{background:var(--green-bg);border-color:var(--green-bd);}
+  .card.mid{background:var(--amber-bg);border-color:var(--amber-bd);}
+  .card .big{font-size:26px;font-weight:700;margin:6px 0;}
+  .card.bad .big{color:var(--red-ink);}
+  .card.good .big{color:var(--green-ink);}
+  .card.mid .big{color:var(--amber-ink);}
+  .card .cap{font-size:12.5px;color:var(--sub);}
+  .foot{margin-top:26px;font-size:12.5px;color:var(--sub);text-align:center;}
+  code{background:#f1ead9;border:1px solid var(--line);border-radius:5px;padding:1px 6px;font-size:13px;font-family:Consolas,'Courier New',monospace;}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="kicker">PAPER READING · TRACE AS STATE</div>
+  <h1>Transformer 基础与 TRACE AS STATE 图解</h1>
+  <div class="sub">回答三个问题：① 自回归生成是什么？② 因果注意力为什么"不能回头改"？③ KV cache 是什么？以及——既然第一遍已经得到答案，论文为什么还要推理第二遍？</div>
+  <nav class="toc">
+    <a href="#sec1">① 自回归生成</a>
+    <a href="#sec2">② 因果注意力</a>
+    <a href="#sec3">③ KV cache</a>
+    <a href="#sec4">④ 论文的两遍流程</a>
+    <a href="#sec5">⑤ 为什么还要第二遍</a>
+  </nav>
+</header>
+
+<!-- ===== 0 概览 ===== -->
+<section>
+  <h2><span class="no">0</span>一句话总览</h2>
+  <p>论文 <b>TRACE AS STATE</b> 不改 Transformer 的架构、不训练模型，只改<b>输入的组织方式</b>：让模型先读一遍长上下文并"打草稿"（第一遍推理），再把草稿（推理痕迹 T）放到上下文<b>最前面</b>，让模型重读一遍（第二遍推理）。因为 Transformer 是<b>因果</b>的——每个位置只能看到它前面的内容——把 T 放最前面，等于让所有"早期位置"都能看到后期才确定的"任务状态"。</p>
+  <div class="hl"><b>动手玩：</b>下面 4 个模块都可以点按交互。第 1–3 节补 Transformer 基础，第 4–5 节回到论文本身。</div>
+</section>
+
+<!-- ===== 1 自回归 ===== -->
+<section id="sec1">
+  <h2><span class="no">1</span>自回归生成（Autoregressive Decoding）</h2>
+  <p class="lead">"LLM 是一个一个往外吐 token" —— 这句话的准确含义：模型每一步只预测<b>下一个</b> token，预测完把它接到输入末尾，再预测下一个。生成的每一步，模型的输入就是"已经生成的全部内容"。</p>
+  <div class="formula">P(y) = P(y₁) · P(y₂ | y₁) · P(y₃ | y₁,y₂) · …</div>
+
+  <h3>试一试：点击"生成下一个"</h3>
+  <div class="tokens" id="ar-tokens"></div>
+  <div class="status" id="ar-status"></div>
+  <div class="ctrl">
+    <button id="ar-next">生成下一个 token</button>
+    <button id="ar-reset" class="ghost">重置</button>
+  </div>
+
+  <div class="note"><b>关键点：</b>每一步生成时，模型"看到"的是 <b>全部历史 token</b>（当前行里亮色的部分）。这就是你说的"每次输出之前都会把之前的输出重新输入进去"——注意，它能看到的是<b>过去</b>，永远看不到<b>未来</b>。</div>
+</section>
+
+<!-- ===== 2 因果注意力 ===== -->
+<section id="sec2">
+  <h2><span class="no">2</span>因果注意力："所有位置一起做 attention" 是什么意思</h2>
+  <p class="lead">训练和"预填充"时，整段输入是一次性全部喂给模型的——所以叫"所有位置一起做 attention"。但每个位置能"看"谁是受限制的：<b>位置 i 只能看 1…i</b>，这就是因果掩码（causal mask）。</p>
+
+  <h3>点击下方任意 token，看它能"看到"谁</h3>
+  <div class="matwrap">
+    <div>
+      <div class="tokens" id="mat-tokens" style="margin-bottom:8px;"></div>
+      <div class="mat" id="mat"></div>
+    </div>
+    <div style="flex:1;min-width:250px;">
+      <div class="status" id="mat-status" style="font-size:15px;color:var(--ink);margin-top:0;"></div>
+      <div class="legend" id="mat-legend"></div>
+    </div>
+  </div>
+
+  <div class="hl"><b>直觉：</b>整段一起算 ≠ 每段都能看全段。位置 i 的隐藏表示 hᵢ 只由 c₁…cᵢ 决定（<code>hᵢ = f(c₁,…,cᵢ)</code>）。一旦算完，hᵢ 就<b>定稿</b>了——后面位置的信息无论多重要，都进不了 hᵢ。这就是"不能回头改"的数学来源。</div>
+
+  <div class="warn"><b>和破案例子的对应：</b>读卷宗时，第 30 页的"解读"= h₃₀，只用了前 30 页的信息；第 500 页揭示凶手 = c₅₀₀，它改不了 h₃₀。要改，只能"重读一遍"（新的 pass），让第 30 页重新计算——这就是第二遍推理做的事。</div>
+</section>
+
+<!-- ===== 3 KV cache ===== -->
+<section id="sec3">
+  <h2><span class="no">3</span>KV cache：生成时为什么不是每步重算</h2>
+  <p class="lead">生成第 6 个 token 时，它要 attend 到前面 5 个 token。问题：前面 5 个位置的 Key / Value 每次都要重新算吗？</p>
+
+  <div class="kvcols">
+    <div class="kvcol bad">
+      <h4>无缓存（naive）：每步重算全部前缀</h4>
+      <div class="kvrow"><span class="kvtok re">c₁</span><span class="kvtok re">c₂</span><span class="kvtok re">c₃</span><span class="kvtok re">c₄</span><span class="kvtok re">c₅</span><span class="arrow">→</span><span class="kvtok new">c₆</span></div>
+      <p style="font-size:14px;margin-top:6px;">生成 c₆ 时，c₁…c₅ 的 K/V <b>全部重算一遍</b>。生成长度 n 时总开销 O(n²)，又慢又浪费。</p>
+    </div>
+    <div class="kvcol good">
+      <h4>有 KV cache：只算新 token，复用旧的</h4>
+      <div class="kvrow"><span class="kvtok fa">c₁</span><span class="kvtok fa">c₂</span><span class="kvtok fa">c₃</span><span class="kvtok fa">c₄</span><span class="kvtok fa">c₅</span><span class="arrow">→</span><span class="kvtok new">c₆</span></div>
+      <p style="font-size:14px;margin-top:6px;">c₁…c₅ 的 K/V 存在缓存里（绿色），c₆ 只算自己的 Q/K/V，再与缓存做 attention。每步开销 O(n)，总开销 O(n)。</p>
+    </div>
+  </div>
+
+  <div class="note"><b>关键点（和论文的关系）：</b>KV cache 复用的是<b>已经定稿的旧表示</b>。缓存不会"吸收"后面的新信息去更新旧位置——旧位置的 K/V 就是它被处理那一刻的值。所以 cache 只是省计算，<b>不改变因果性</b>。想让早期位置看到新信息，唯一办法是重跑一遍包含新前缀的前向（附录 F 的 token 用量表就是这套重跑的实际成本）。</div>
+</section>
+
+<!-- ===== 4 论文的两遍流程 ===== -->
+<section id="sec4">
+  <h2><span class="no">4</span>TRACE AS STATE 怎么对 Transformer 做工作</h2>
+  <p class="lead">不改架构、不改权重、不训练——只改变<b>第二遍推理时输入的组织方式</b>。</p>
+
+  <h3>第一遍（Pass 1）：读上下文 + 打草稿</h3>
+  <div class="pipe">
+    <span class="pnode x">x（长上下文）</span><span class="arrow">→</span>
+    <span class="pnode m">M（模型）</span><span class="arrow">→</span>
+    <span class="pnode r">r（推理痕迹）</span>
+    <span class="pnode r">a（可见答案）</span><span class="arrow">→</span>
+    <span class="pnode m">π（序列化器）</span><span class="arrow">→</span>
+    <span class="pnode t">T（痕迹块）</span>
+  </div>
+  <div class="pcaption">第一遍只做推理（reasoning only），把中间思考 r 打包成固定格式的 T</div>
+
+  <h3>第二遍（Pass 2）：同一个模型、同一份上下文，只有 T 的位置不同</h3>
+  <div class="pipe">
+    <span class="pnode t">T</span><span class="arrow">→</span>
+    <span class="pnode x">x</span><span class="arrow">→</span>
+    <span class="pnode m">M</span><span class="arrow">→</span>
+    <span class="pnode r">r′</span>
+    <span class="pnode r">a′</span>
+    <span style="margin-left:12px;font-size:13px;color:var(--green-ink);font-weight:700;">TRACE AS STATE [T, x] ✔</span>
+  </div>
+  <div class="pipe">
+    <span class="pnode x">x</span><span class="arrow">→</span>
+    <span class="pnode t">T</span><span class="arrow">→</span>
+    <span class="pnode m">M</span><span class="arrow">→</span>
+    <span class="pnode r">r′</span>
+    <span class="pnode r">a′</span>
+    <span style="margin-left:12px;font-size:13px;color:var(--amber-ink);font-weight:700;">TRACE APPEND [x, T]</span>
+  </div>
+
+  <div class="ok"><b>为什么 [T, x] 有效：</b>第二遍重读时，x 的<b>每一个位置</b>（包括最早期）的前缀里都多了 T。注意力视角下，早期位置这次能 attend 到任务状态了——等于把"条件在后"（坏情况，为所有可能状态留残差映射）改成了"条件在前"（好情况，只跟一条状态路径）。</div>
+  <div class="warn"><b>为什么 [x, T] 是合格对照：</b>T 在最后，早期位置照样看不到它，救不了已经定稿的表示——所以 TRACE APPEND 只是"换一种输入顺序"的参照物。</div>
+</section>
+
+<!-- ===== 5 为什么第二遍 ===== -->
+<section id="sec5">
+  <h2><span class="no">5</span>为什么还要第二遍？第一遍不是已经有答案了吗？</h2>
+  <p class="lead">第一遍确实有答案——但那个答案是<b>在"不知道任务状态"的情况下盲答的</b>，准确率很低。第二遍的目的不是"再算一遍"，而是<b>带着已确定的状态重读上下文，得到更准的答案</b>。</p>
+
+  <div class="cards">
+    <div class="card bad">
+      <h4>第一遍（盲答）</h4>
+      <div class="big">29.2%</div>
+      <div class="cap">GraphWalks Parents 精确匹配（DeepSeek V4 Pro）。早期位置被迫对所有可能状态"留一手"，表示模糊，答案自然差。</div>
+    </div>
+    <div class="card mid">
+      <h4>TRACE APPEND（草稿放最后）</h4>
+      <div class="big">43.0%</div>
+      <div class="cap">草稿 T 只在最后一段可被使用，救不了前面已经定稿的表示——只有小幅提升。</div>
+    </div>
+    <div class="card good">
+      <h4>TRACE AS STATE（草稿放最前）</h4>
+      <div class="big">81.8%</div>
+      <div class="cap">重读时每个位置都能看到状态，表示清晰，答案大幅提升。27 个组合里 26 个优于 TRACE APPEND。</div>
+    </div>
+  </div>
+
+  <h3>那"成本"呢？—— 注意：不是省钱，是加钱买准确率</h3>
+  <div class="warn"><b>纠正一个常见误解：</b>TRACE AS STATE 并没有减少计算开销。它<b>多跑了一遍完整推理</b>，而且第二遍输入更长（多了 T），token 用量反而增加（附录 F：TRACE AS STATE 的总输入 token ≈ 第一遍 + 第二遍）。它真正减少的是概念上的"残差映射负担"——早期位置不再需要同时维护 k 套可能状态的解读。代价是翻倍的推理成本，收益是大幅提升的准确率（如 29.2% → 81.8%）。</div>
+
+  <div class="hl"><b>一句话：</b>第一遍 = 打草稿（把状态"外化"成文本 T）；第二遍 = 带着草稿重读、重新作答。两遍用的答案可以完全不同——第二遍才是论文报告成绩的那一次。</div>
+</section>
+
+<div class="foot">基于论文《Trace as State: Reasoning Traces as Conditional States for Long-Context Transformers》（arXiv:2609.02702）图 1 与正文、附录 E/F 数据绘制。本页为教学示意。</div>
+
+</div>
+
+<script>
+(function(){
+  'use strict';
+  /* ===== 1 自回归演示 ===== */
+  var seq = ['天','气','真','好','，','适','合','散','步'];
+  var pos = 3;
+  var arBox = document.getElementById('ar-tokens');
+  var arStatus = document.getElementById('ar-status');
+  function renderAR(){
+    var html = '';
+    for(var i=0;i<seq.length;i++){
+      if(i<pos){ html += '<span class="tok c">'+seq[i]+'</span>'; }
+      else if(i===pos){ html += '<span class="tok g">'+seq[i]+'</span>'; }
+      else { html += '<span class="tok dim">'+seq[i]+'</span>'; }
+    }
+    arBox.innerHTML = html;
+    if(pos >= seq.length){
+      arStatus.textContent = '生成完成。注意：每一步生成时，模型看到的输入 = 亮蓝色全部已生成 token（前缀），绿色的是这一步刚"预测"出的新 token。';
+      document.getElementById('ar-next').disabled = true;
+    } else if(pos === 3){
+      arStatus.textContent = '这是初始状态：前 3 个 token 已给出。模型将基于它们预测第 4 个（绿色）。';
+    } else {
+      arStatus.textContent = '第 '+(pos-2)+' 步：模型输入 = 前面 '+(pos)+' 个 token（蓝色），预测出第 '+(pos+1)+' 个（绿色）。它看不到后面灰色（未来）的 token。';
+    }
+  }
+  document.getElementById('ar-next').addEventListener('click', function(){
+    if(pos < seq.length){ pos++; renderAR(); }
+  });
+  document.getElementById('ar-reset').addEventListener('click', function(){
+    pos = 3;
+    document.getElementById('ar-next').disabled = false;
+    renderAR();
+  });
+  renderAR();
+
+  /* ===== 2 因果注意力矩阵 ===== */
+  var N = 6;
+  var active = 2; // default position 3 (index 2)
+  var mTok = document.getElementById('mat-tokens');
+  var mat = document.getElementById('mat');
+  var mStatus = document.getElementById('mat-status');
+  var mLegend = document.getElementById('mat-legend');
+  function renderMat(){
+    var th = '';
+    for(var i=0;i<N;i++){ th += '<span class="tok" data-i="'+i+'" style="cursor:pointer;">c'+(i+1)+'</span>'; }
+    mTok.innerHTML = th;
+    var cells = '';
+    for(var r=0;r<N;r++){
+      for(var c=0;c<N;c++){
+        var cls = '';
+        if(c <= r){ cls = (r===active && c<=active) ? 'on' : 'on'; }
+        else { cls = (r===active && c>active) ? 'block' : 'off'; }
+        cells += '<div class="mcell '+cls+'" data-r="'+r+'" data-c="'+c+'">'+(c<=r?'✓':'✗')+'</div>';
+      }
+    }
+    mat.innerHTML = cells;
+    mStatus.innerHTML = '位置 <b>c'+(active+1)+'</b> 的表示 h'+(active+1)+' = f(c₁,…,c'+(active+1)+')。'+
+      '它能看到：<b style="color:var(--green-ink)">c₁…c'+(active+1)+'</b>（该行绿色格）；'+
+      '它看不到：<b style="color:var(--red-ink)">c'+(active+2)+'…c₆</b>（红色格 = 被因果掩码挡住）。';
+    mLegend.innerHTML = '<i style="background:var(--green-bg);border:1px solid var(--green);"></i>该位置可见（前缀）'+
+      '<i style="background:var(--red-bg);border:1px solid var(--red-bd);"></i>想进来看却被掩码挡住'+
+      '<i style="background:#f4ede0;"></i>未激活位置的可见性';
+  }
+  function setActive(i){
+    active = Math.max(0, Math.min(N-1, i));
+    renderMat();
+  }
+  mat.addEventListener('click', function(e){
+    var cell = e.target.closest('.mcell');
+    if(cell){ setActive(parseInt(cell.getAttribute('data-r'),10)); }
+  });
+  mTok.addEventListener('click', function(e){
+    var t = e.target.closest('.tok');
+    if(t){ setActive(parseInt(t.getAttribute('data-i'),10)); }
+  });
+  renderMat();
+})();
+</script>
+</body>
+</html>
